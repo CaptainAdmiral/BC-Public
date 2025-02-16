@@ -7,3 +7,5 @@ using a non-standard protocol (prisoners dilemma with N>>1 other prisoners). Cas
 verifiers.
 
 Handling consensus this way has the benefit of preventing deanonymization (knowledge of transactions is distributed across a random subnetwork) and scalability (O(1) updates to complete transaction compared to O(n))
+
+Please note that this is a public version of the project and the actual dialogue trees are not included.
