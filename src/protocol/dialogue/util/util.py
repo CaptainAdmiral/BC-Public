@@ -3,31 +3,19 @@ from dataclasses import dataclass
 import numpy as np
 from typing import AbstractSet, Any, Callable, Concatenate, Coroutine, Generator, Iterable, Optional, TypeGuard
 
+from cryptography.util import RandomGen
 from network_emulator import network
 from network_emulator.network import NetworkException
 from protocol.dialogue.dialogue_graph import DialogueException
 from protocol.dialogue.util.dialogue_util import DialogueUtil
-from protocol.dialogue.util.stat import check_consecutive_skips, check_total_skipped
+from protocol.dialogue.util.rng_seed import RNGSeed
+from protocol.dialogue.util.stat import check_consecutive_skips, check_missing_events, check_total_skipped
 from protocol.std_protocol.std_protocol import NodeData, StdProtocol, VerificationNodeData
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
 import protocol.dialogue.dialogues as dialogues
 
-from settings import TRANSACTION_WITNESSES
-
-@dataclass(frozen=True)
-class RNGSeed:
-    """Part of the seed for witness selection RNG. The actual entropy comes from the latest hash of the network
-    but to prevent the same nodes from being overloaded by every transaction on that hash we determine the seed
-    based on a few extra values as well."""
-
-    payer_public_key: str
-    payee_public_key: str
-    timestamp: float
-
-    def __hash__(self):
-        # Values are strongly quantized here first to prevent RNG manipulation
-        # TODO Strongly quantize values first to reduce RNG manipulation
-        return hash(self)
+from protocol.verification_net.vnt_types import VerificationNetEvent
+from settings import NODE_0_PUBLIC_KEY, TRANSACTION_WITNESSES
 
 @dataclass
 class Response[R]:
@@ -42,15 +30,23 @@ class SelectedNode:
     def dialogue_util(self):
         return DialogueUtil(self.net_con)
 
-def witness_selection_iter(vnt: VerificationNetTimeline, cutoff: float, rng_seed: RNGSeed) -> Generator[VerificationNodeData, Any, None]:
-    verification_nodes = vnt.to_list(cutoff)
-    latest_checksum = vnt.get_latest_checksum(cutoff)
-    seed = hash((latest_checksum, hash(rng_seed)))
-    rand = np.random.default_rng(seed) # TODO substitute a random generator that's been checked for bias
+def witness_selection_iter(vnt: VerificationNetTimeline,
+                           cutoff: float,
+                           rng_seed: RNGSeed,
+                           missing_event_ids: Optional[set[str]]=None) -> Generator[VerificationNodeData, Any, None]:
+    verification_nodes = vnt.to_list(cutoff=cutoff, excluded_event_ids=missing_event_ids)
+    rng = RandomGen(rng_seed)
     
     while True:
         if verification_nodes:
-            yield verification_nodes.pop(rand.integers(0, len(verification_nodes)))
+            node = verification_nodes.pop(rng.next(len(verification_nodes)))
+            if node.public_key == rng_seed.payee_public_key:
+                continue
+            if node.public_key == rng_seed.payer_public_key:
+                continue
+            if node.public_key == NODE_0_PUBLIC_KEY:
+                continue
+            yield node
         else:
             break
 
@@ -61,15 +57,23 @@ def validate_skips(skip_list: Iterable[bool]):
     check_total_skipped(skip_array)
     check_consecutive_skips(skip_array)
 
-def validate_selected_witnesses(protocol: StdProtocol, selected_nodes: AbstractSet[VerificationNodeData], cutoff: float, seed: RNGSeed):
+def validate_selected_witnesses(protocol: StdProtocol,
+                                selected_nodes: AbstractSet[VerificationNodeData],
+                                cutoff: float,
+                                seed: RNGSeed,
+                                missing_event_ids: Optional[set[str]]=None):
     """Checks whether the selected nodes were the expected selected nodes and raises an error if they weren't or
     if the selected nodes were statistically implausible"""
 
-    ws_iter = witness_selection_iter(protocol.verification_net_timeline, cutoff, seed) # TODO handle iterator exhausted
+    ws_iter = witness_selection_iter(protocol.verification_net_timeline, cutoff, seed, missing_event_ids) # TODO handle iterator exhausted
     skip_iter = (node not in selected_nodes for node in ws_iter)
 
     # Verify the sequence of skipped nodes reported is statistically plausible
     validate_skips(skip_iter)
+
+def validate_missing_events(missing_events: Iterable[VerificationNetEvent], timestamp: float):
+    """Checks whether the events unknown to all parties at the time of transaction are statistically plausible"""
+    check_missing_events(missing_events, timestamp)
 
 async def select_witnesses(protocol: StdProtocol, cutoff: float, seed: RNGSeed) -> tuple[list[SelectedNode], list[bool]]:
     """Selects and reaches out to nodes from the verification network in accordance with the random seed at time 'cutoff'.
@@ -197,3 +201,18 @@ async def gather_responses[R](protocol: StdProtocol,
 
 def filter_exceptions[T](val: T | BaseException) -> TypeGuard[T]:
         return not isinstance(val, BaseException)
+
+async def contact_all_verification_nodes[**P](protocol: StdProtocol,
+                                              dialogue: Callable[Concatenate[DialogueUtil, StdProtocol, P], Any],
+                                              *args: P.args,
+                                              **kwargs: P.kwargs):
+    
+    verifiers = protocol.verification_net_timeline.to_list()
+
+    async def contact(node: VerificationNodeData):
+        vnc = await network.connect(protocol.address, node.address)
+        vdu = DialogueUtil(vnc)
+        await dialogue(vdu, protocol, *args, **kwargs)
+
+    dialogue_tasks: set[asyncio.Task] = set(asyncio.create_task(contact(node)) for node in verifiers)
+    await asyncio.wait(dialogue_tasks)

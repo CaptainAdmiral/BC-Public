@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, Generator, Iterable, MutableSequence, Optional
+from typing import Any, Callable, Iterable, Iterator, MutableSequence, Optional
 from util.timestamped import Timestamped
 
 class _ChronologyNode(Timestamped):
@@ -73,7 +73,7 @@ class Chronology[T](MutableSequence[T]):
     def __setitem__(self, key, value):
         raise TypeError(f"{self.__class__.__name__} object does not support item assignment")
     
-    def __getitem__(self, key: slice) -> Generator[T, None, None]: # type: ignore
+    def __getitem__(self, key: slice) -> Iterator[T]: # type: ignore
         if isinstance(key, int):
             raise TypeError("Must use slice indexing to specify a time range")
         if not isinstance(key, slice):
@@ -84,7 +84,7 @@ class Chronology[T](MutableSequence[T]):
         
         return self.bounded_iter(key.start, key.stop)
     
-    def bounded_iter(self, start: float | None, stop: float | None) -> Generator[T, None, None]:
+    def bounded_iter(self, start: float | None, stop: float | None) -> Iterator[T]:
         '''Returns an iterator for the given time range in the closed interval [start, stop]'''
 
         if not self._earliest or not self._latest:
@@ -104,7 +104,7 @@ class Chronology[T](MutableSequence[T]):
                 yield event.data
             event = event._next
 
-    def bounded_riter(self, start: float | None, stop: float | None) -> Generator[T, None, None]:
+    def bounded_riter(self, start: float | None, stop: float | None) -> Iterator[T]:
         '''Returns an iterator for the given time range in the closed interval [start, stop]'''
 
         if not self._earliest or not self._latest:
@@ -136,21 +136,21 @@ class Chronology[T](MutableSequence[T]):
             yield event
             event = event._prev
 
-    def wrapped_iter_from(self, node: _ChronologyNode, reverse=False) -> Generator[_Event[T], None, None]:
+    def wrapped_iter_from(self, node: _ChronologyNode, reverse=False) -> Iterator[_Event[T]]:
         event = node
         while event is not None:
             if isinstance(event, _Event):
                 yield event
             event = event.prev if reverse else event.next
 
-    def iter_from(self, node: _ChronologyNode, reverse=False) -> Generator[T, None, None]:
+    def iter_from(self, node: _ChronologyNode, reverse=False) -> Iterator[T]:
         '''Iterates starting at the given node'''
         return (event.data for event in self.wrapped_iter_from(node, reverse=reverse))
 
-    def __iter__(self) -> Generator[T, None, None]:
+    def __iter__(self) -> Iterator[T]:
         return (el.data for el in self._f_wrapped_iter() if isinstance(el, _Event))
 
-    def __reversed__(self) -> Generator[T, None, None]:
+    def __reversed__(self) -> Iterator[T]:
         return (el.data for el in self._r_wrapped_iter() if isinstance(el, _Event))
     
     def _get_nearest_epoch(self, time: float) -> _EpochMarker | None:

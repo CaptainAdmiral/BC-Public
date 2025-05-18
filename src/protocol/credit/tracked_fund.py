@@ -1,39 +1,35 @@
-from protocol.credit.credit_types import FundWithdrawal, Receipt
+from uuid import UUID
+from protocol.credit.credit_types import FundWithdrawal, Receipt, Stake
 
 class TrackedFund:
 
     def __init__(self, receipt: Receipt):
         self.receipt = receipt
-        self._available = receipt.contract.amount
-        self._reserved = 0
         self.withdrawals: list[Receipt] = []
+        self.reservations: list[Stake] = []
 
     @property
     def available(self):
-        return self._available
+        return self.receipt.contract.amount - sum(receipt.contract.amount for receipt in self.withdrawals)
     
     @property
     def reserved(self):
-        return self._reserved
+        return sum(reservation.amount for reservation in self.reservations)
 
     @property
     def remaining(self):
-        return self._available + self._reserved
+        return self.available + self.reserved
 
-    def log_withdrawal(self, withdrawal: FundWithdrawal, receipt: Receipt):
-        assert(withdrawal.amount <= self._available)
+    def withdraw_credit(self, withdrawal: FundWithdrawal, receipt: Receipt):
+        assert(withdrawal.amount <= self.available)
         self.withdrawals.append(receipt)
-        self._available -= withdrawal.amount
 
-    def reserve_credit(self, amount: int):
-        assert(amount <= self._available)
-        self._available -= amount
-        self._reserved += amount
+    def reserve_credit(self, stake: Stake):
+        amount = stake.amount
+        assert(amount <= self.available)
 
-    def unreserve_credit(self, amount: int):
-        assert(amount <= self._reserved)
-        self._reserved -= amount
-        self._available += amount
+    def release_credit(self, stake_id: UUID):
+        self.reservations = list(filter(lambda res: res.uuid == stake_id, self.reservations))
 
     def __hash__(self):
         return hash(self.receipt)

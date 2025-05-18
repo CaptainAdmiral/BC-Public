@@ -3,9 +3,9 @@ import asyncio
 from dataclasses import dataclass, field
 import json
 import random
-import time
 from typing import Any, Callable, Hashable, Self, cast
 from cryptography.signature import Signed, SignatureFactory
+from cryptography.util import generate_keypair
 from network_emulator import NetConnection, network as net
 from protocol import AbstractProtocol
 from protocol.credit.credit_types import Stake
@@ -17,8 +17,10 @@ from protocol.dialogue import dialogue_registry
 from protocol.dialogue.const import DialogueEnum
 from protocol.dialogue.util.dialogue_util import DialogueUtil
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
-from settings import ACTIVE_RATIO, BROADCAST_AGGREGATION_DECAY, BROADCAST_SPREAD, MAX_BROADCAST_LIFETIME
+from protocol.verification_net.vnt_types import LeaveEvent, VerificationNetEvent, VerificationNetEventEnum
+from settings import ACTIVE_RATIO, BROADCAST_AGGREGATION_DECAY, BROADCAST_SPREAD, MAX_BROADCAST_LIFETIME, TIME_TO_CONSISTENCY
 import numpy as np
+import timeline
 
 @dataclass(frozen=True)
 class NodeData:
@@ -30,6 +32,7 @@ class NodeData:
 class VerificationNodeData(NodeData):
     '''The public data for verification nodes on the network'''
     timestamp: float
+    paused: bool = False
 
 @dataclass
 class ActiveBroadcast:
@@ -59,16 +62,20 @@ class StdProtocol(AbstractProtocol):
         '''Timeline of events (nodes joining/leaving etc) occurring on the verification subnetwork'''
         self.address = node.address
         self.wallet = Wallet(self.address)
-        self.public_key: str
-        self.private_key: str
+        self._public_key_obj, self._private_key_obj = generate_keypair()
+        self.public_key = self._public_key_obj.as_str()
+        self.private_key = self._private_key_obj.as_str()
         self.sf = SignatureFactory(
-            public_key=self.public_key,
-            private_key=self.private_key,
+            public_key=self._public_key_obj,
+            private_key=self._private_key_obj,
             address=self.address
         )
-        self.stake: Stake | None = None
         self.receipt_book = ReceiptBook()
         '''Receipts held for other accounts'''
+        self.stake: Stake | None = None
+
+        self.verification_net_timeline.subscribe(lambda event: self.on_event_added(event))
+        self.node_data = NodeData(self.address, self.public_key)
 
     @staticmethod
     def weight() -> float:
@@ -76,6 +83,11 @@ class StdProtocol(AbstractProtocol):
     
     def sign[T: Hashable](self, message: T) -> Signed[T]:
         return self.sf.sign(message)
+
+    def verification_node_data(self) -> VerificationNodeData:
+        if self.stake is None:
+            raise RuntimeError('Requesting verification node data but protocol does not have a stake for the verification net')
+        return VerificationNodeData(self.address, self.public_key, self.stake.timestamp)
 
     async def _handle_broadcast(self, net_con: NetConnection, broadcast: Broadcast[Self, BroadcastData]):
         with net_con:
@@ -89,7 +101,7 @@ class StdProtocol(AbstractProtocol):
             except:
                 return None
             
-        lifetime = time.time() - broadcast_data.origin_time
+        lifetime = timeline.cur_time() - broadcast_data.origin_time
         if lifetime > MAX_BROADCAST_LIFETIME:
             return
         
@@ -160,7 +172,7 @@ class StdProtocol(AbstractProtocol):
             ...
 
     async def _aggregate_broadcasts(self, active_broadcast: ActiveBroadcast):
-        lifetime = time.time() - active_broadcast.origin_time
+        lifetime = timeline.cur_time() - active_broadcast.origin_time
         await asyncio.sleep((1 + random.random()) * lifetime)
         self.add_task(self._rebroadcast(active_broadcast))
 
@@ -188,3 +200,17 @@ class StdProtocol(AbstractProtocol):
     def accept_net_connection(self, net_con: NetConnection):
         '''Accepts an incoming net connection'''
         self.add_task(self._monitor_net_connection(net_con))
+    
+    def schedule_event(self, time: float, callback: Callable):
+        timeline.schedule_event(time, callback)
+
+    def on_event_added(self, event: VerificationNetEvent):
+        if event.event_type == VerificationNetEventEnum.NODE_LEAVE:
+            event = cast(LeaveEvent, event)
+            if self.public_key in (witness.public_key for witness in event.data.stake_witnesses):
+                def schedule_stake_release():
+                    for fund_id in event.data.fund_ids:
+                        if fund_id in self.receipt_book:
+                            self.receipt_book[fund_id].release_credit(event.data.stake_id)
+
+                self.schedule_event(event.timestamp + TIME_TO_CONSISTENCY, schedule_stake_release)

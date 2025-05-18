@@ -13,7 +13,7 @@ class DialogueEnum(StrEnum):
     REQUEST_WITNESS_SIGNATURE = auto()
     CONFIRM_TRANSACTION = auto()
     REQUEST_HOLD_RECEIPT = auto()
-    REQUEST_JOIN_VERIFICATION_NET = auto()
+    INFORM_VNT_EVENT = auto()
     CONFIRM_STAKE = auto()
 
 class ControlPacket(StrEnum):

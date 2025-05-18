@@ -1,21 +1,23 @@
 import asyncio
-from collections import namedtuple
-from dataclasses import dataclass
-import time
 import random
-from typing import Any, Coroutine, Optional, TypeGuard
+import secrets
+from typing import Any, Coroutine, Optional
+from uuid import UUID
 from cryptography.signature import Signature, Signed
 from network_emulator import network
-from protocol.credit.credit_types import ContractType, Transaction, FundWithdrawal, Receipt, Stake
+from protocol.credit.credit_types import ContractType, Transaction, Receipt, Stake
 from protocol.dialogue.base_dialogue import DialogueException
 from protocol.dialogue.const import ControlPacket, DialogueEnum
 from protocol.dialogue.dialogue_registry import register_init, register_response
 from protocol.dialogue.packets import LatestChecksum
 from protocol.dialogue.util.dialogue_util import DialogueUtil
-from protocol.dialogue.util.util import RNGSeed, SelectedNode, filter_exceptions, gather_responses, select_witnesses, validate_selected_witnesses, validate_skips
+from protocol.dialogue.util.rng_seed import RNGSeed
+from protocol.dialogue.util.util import SelectedNode, contact_all_verification_nodes, filter_exceptions, gather_responses, select_witnesses, validate_skips
 from protocol.std_protocol.std_protocol import NodeData, StdProtocol, VerificationNodeData
-from protocol.verification_net.verification_net_event import VNTEventFactory, VNTEventPacket
-from settings import ACTIVE_RATIO, MIN_CONNECTIONS, STAKE_AMOUNT, VERIFICATION_CUTOFF, VERIFIER_REDUNDANCY
+from protocol.verification_net.vnt_event_factory import VNTEventFactory
+from protocol.verification_net.vnt_types import EntropyData, LeaveData, PauseData, ResumeData, VNTEventPacket, VerificationNetEventEnum
+from settings import ACTIVE_RATIO, MIN_CONNECTIONS, NODE_0_PUBLIC_KEY, STAKE_AMOUNT, TIME_TO_CONSISTENCY, VERIFIER_REDUNDANCY
+from timeline import cur_time
 
 @register_init(DialogueEnum.HANDSHAKE)
 async def handshake(du: DialogueUtil, protocol: StdProtocol):
@@ -36,7 +38,7 @@ async def check_same_vnt(du: DialogueUtil, protocol: StdProtocol, cutoff: Option
         raise DialogueException('Empty VNT timeline')
     
     du.reply(cutoff)
-    checksum = await du.expect(int)
+    checksum = await du.expect(str)
     return checksum == latest_before.checksum
 
 @register_response(DialogueEnum.CHECK_SAME_VNT)
@@ -57,10 +59,7 @@ async def request_add_self(du: DialogueUtil, protocol: StdProtocol):
     """Request that another node adds this node to it's node list"""
     
     await du.expect_acknowledgement()
-    du.reply(NodeData(
-        address=protocol.address,
-        public_key=protocol.public_key,
-    ))
+    du.reply(protocol.node_data)
 
 @register_response(DialogueEnum.REQUEST_ADD_SELF)
 async def request_add_self_response(du: DialogueUtil, protocol: StdProtocol):
@@ -129,12 +128,12 @@ async def find_latest_checksum_response(du: DialogueUtil, protocol: StdProtocol)
     checksums = await du.expect(list[str])
     
     for cs in checksums:
-        if cs in protocol.verification_net_timeline:
-            matching_hash = cs
+        if protocol.verification_net_timeline.includes_checksum(cs):
+            matching_cs = cs
             du.reply(ControlPacket.SUCCESS)
             await du.expect_acknowledgement()
-            du.reply(matching_hash)
-            return matching_hash
+            du.reply(matching_cs)
+            return matching_cs
         
     du.reply(ControlPacket.FAILURE)
     return None
@@ -145,7 +144,7 @@ async def request_missing_events(du: DialogueUtil, protocol: StdProtocol, from_c
 
     await du.expect_acknowledgement()
     du.reply(LatestChecksum(checksum=from_checksum))
-    return await du.expect(list[VNTEventPacket])
+    return await du.expect(list[Signed[VNTEventPacket]])
 
 @register_response(DialogueEnum.REQUEST_MISSING_EVENTS)
 async def request_missing_events_response(du: DialogueUtil, protocol: StdProtocol):
@@ -158,9 +157,9 @@ async def request_missing_events_response(du: DialogueUtil, protocol: StdProtoco
         matched = vnt.from_checksum(from_checksum)
         if matched is None:
             raise DialogueException('Invalid dialogue state')
-        events = list(event.to_packet() for event in vnt.iter_from(matched))
+        events = list(event.get_packet() for event in vnt.iter_from(matched))
     else:
-        events = list(event.to_packet() for event in vnt)
+        events = list(event.get_packet() for event in vnt)
     du.reply(events)
     return events
 
@@ -171,17 +170,15 @@ async def send_missing_events(du: DialogueUtil, protocol: StdProtocol, from_chec
     vnt = protocol.verification_net_timeline
     matched = vnt.from_checksum(from_checksum)
     assert(matched)
-    events = list(event.to_packet() for event in vnt.iter_from(matched))
+    events = list(event.get_packet() for event in vnt.iter_from(matched))
     du.reply(events)
     return events
 
 @register_response(DialogueEnum.SEND_MISSING_EVENTS)
 async def send_missing_events_response(du: DialogueUtil, protocol: StdProtocol):
     du.acknowledge()
-    events = await du.expect(list[VNTEventPacket])
-    for event_packet in events:
-        event = VNTEventFactory.from_packet(event_packet)
-        protocol.verification_net_timeline.add(event)
+    events = await du.expect(list[Signed[VNTEventPacket]])
+    protocol.verification_net_timeline.add_from_packets(events)
 
 @register_init(DialogueEnum.SYNC_VNT)
 async def sync_vnt(du: DialogueUtil, protocol: StdProtocol):
@@ -199,8 +196,7 @@ async def sync_vnt(du: DialogueUtil, protocol: StdProtocol):
     
     events = await request_missing_events(du, protocol, from_checksum=latest_checksum)
     await send_missing_events(du, protocol, from_checksum=latest_checksum)
-    for event in events:
-        protocol.verification_net_timeline.add(VNTEventFactory.from_packet(event))
+    protocol.verification_net_timeline.add_from_packets(events)
 
     res = await check_same_vnt(du, protocol)
     if not res:
@@ -230,19 +226,20 @@ async def request_signature_response(du: DialogueUtil, protocol: StdProtocol):
     du.acknowledge()
     signed_contract = await du.expect(Signed[Transaction])
     signed_contract.validate_signatures()
+    validation_flag = not signed_contract.signed_by_N0()
 
     contract = signed_contract.message
-    seed = RNGSeed(contract.payer_public_key, contract.payee_public_key, contract.timestamp)
-    validate_selected_witnesses(protocol, set(contract.witnesses), contract.timestamp, seed)
+    if validation_flag:
+        contract.validate_selected_witnesses(protocol)
     
-    relevant_funds = (fund for fund in contract.funds if fund.receipt_id.contract.payee_public_key == protocol.public_key)
+    relevant_funds = (fund for fund in contract.funds if fund.witnessed_by(protocol.public_key))
 
     for fund in relevant_funds:
-        receipt = fund.receipt_id
-        if receipt not in protocol.receipt_book:
+        receipt_id = fund.receipt_id
+        if receipt_id not in protocol.receipt_book:
             raise DialogueException('No record of receipt')
     
-        tracked_fund = protocol.receipt_book[receipt]
+        tracked_fund = protocol.receipt_book[receipt_id]
         if tracked_fund.available < fund.amount:
             raise DialogueException('Insufficient funds remaining')
         
@@ -254,7 +251,9 @@ async def confirm_transaction(du: DialogueUtil, protocol: StdProtocol, receipt: 
     
     await du.expect_acknowledgement()
     du.reply(receipt)
-    return await du.expect(Signature)
+    sig = await du.expect(Signature)
+    sig.validate(receipt)
+    return sig
 
 @register_response(DialogueEnum.CONFIRM_TRANSACTION)
 async def confirm_transaction_response(du: DialogueUtil, protocol: StdProtocol):
@@ -271,6 +270,8 @@ async def confirm_transaction_response(du: DialogueUtil, protocol: StdProtocol):
     
     for fund in relevant_funds:
         protocol.receipt_book.update_credit(fund, receipt)
+    
+    du.reply(protocol.sf.get_signature(receipt))
 
 @register_init(DialogueEnum.REQUEST_HOLD_RECEIPT)
 async def request_hold_receipt(du: DialogueUtil, protocol: StdProtocol, receipt: Signed[Receipt]):
@@ -286,12 +287,13 @@ async def request_hold_receipt_response(du: DialogueUtil, protocol: StdProtocol)
     signed_receipt = await du.expect(Signed[Receipt])
 
     if len(signed_receipt.signatures) < VERIFIER_REDUNDANCY:
-        raise DialogueException('Not enough signatures')
+        if not signed_receipt.signed_by(NODE_0_PUBLIC_KEY):
+            raise DialogueException('Not enough signatures')
     
     signed_receipt.validate_signatures()
     receipt = signed_receipt.message
 
-    if not any(protocol.public_key == witness.public_key for witness in receipt.contract.witnesses):
+    if not receipt.contract.witnessed_by(protocol.public_key):
         raise DialogueException('Not a witness for this transaction')
     
     receipt.validate_signatures()
@@ -303,22 +305,22 @@ async def request_hold_receipt_response(du: DialogueUtil, protocol: StdProtocol)
 async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int, payee: NodeData):
     """Send currency to another wallet"""
 
-    timestamp = time.time()
-    cutoff = timestamp - VERIFICATION_CUTOFF
-    seed = RNGSeed(protocol.public_key, payee.public_key, cutoff)
+    timestamp = cur_time()
+    checksum = protocol.verification_net_timeline.get_latest_checksum()
+    seed = RNGSeed(checksum=checksum, payee_public_key=payee.public_key, payer_public_key=protocol.public_key)
 
     # Helper function to sync missing events
-    async def get_missing_events(witness: SelectedNode) -> list[VNTEventPacket]:
+    async def get_missing_events(witness: SelectedNode) -> list[Signed[VNTEventPacket]]:
         wdu = witness.dialogue_util()
         latest_checksum = await find_latest_checksum(wdu, protocol)
 
         if latest_checksum is None:
             raise DialogueException("Couldn't sync VNT")
         
-        latest_event = protocol.verification_net_timeline.from_checksum(latest_checksum)
-        assert(latest_event is not None)
-        
-        if latest_event.timestamp > cutoff:
+        latest = protocol.verification_net_timeline.latest()
+        assert(latest is not None)
+
+        if latest_checksum == latest.checksum:
             return []
 
         missing = await request_missing_events(wdu, protocol, latest_checksum)
@@ -326,7 +328,7 @@ async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int
     
     while True:
         # Reach out to witnesses
-        witnesses, skipped = await select_witnesses(protocol, cutoff, seed)
+        witnesses, skipped = await select_witnesses(protocol, timestamp, seed)
 
         # Gather missing events
         results = await asyncio.gather(*(get_missing_events(witness) for witness in witnesses), return_exceptions=True)
@@ -334,15 +336,11 @@ async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int
         missing_events = set(event for events in filtered_results for event in events)
 
         # If no missing events before the cutoff then we have the right witnesses
-        if all(event.timestamp > cutoff for event in missing_events):
+        if not missing_events:
             # Make sure we're synced up with payee
             if await check_same_vnt(du, protocol):
                 break
             await sync_vnt(du, protocol)
-
-        for event_packet in missing_events:
-            event = VNTEventFactory.from_packet(event_packet)
-            protocol.verification_net_timeline.add(event)
 
     # Run stat tests on selected witnesses to make sure the selected witnesses are valid
     validate_skips(skipped)
@@ -352,12 +350,16 @@ async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int
     wallet = protocol.wallet
 
     try:
-        funds = wallet.find_funds(amount)
+        funds = wallet.find_funds(amount, protocol.verification_net_timeline)
     except ValueError as e:
         raise DialogueException('Not enough funds to cover transfer')
 
+    for fund in funds:
+        fund.validate_missing_events(protocol)
+
     # Create and send contract
-    countersigned_contract = Transaction(
+    initial_contract = Transaction(
+        uuid=UUID(),
         contract_type=ContractType.TRANSACTION,
         payer_address=protocol.address,
         payer_public_key=protocol.public_key,
@@ -367,29 +369,29 @@ async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int
         funds=tuple(funds),
         witnesses=witness_nodes,
         timestamp=timestamp,
-        vnt_cutoff=cutoff
     )
 
-    initial_contract = protocol.sign(countersigned_contract)
+    signed_contract = protocol.sign(initial_contract)
 
     await du.expect_acknowledgement()
-    du.reply(initial_contract)
+    du.reply(signed_contract)
     
     countersigned_contract = await du.expect(Signed[Transaction]) # Signed by payer and payee but no witnesses yet
+    if not signed_contract.same_as(countersigned_contract):
+        raise DialogueException('Unrecognized contract')
     
     # Get signatures from all witnesses
     async def get_signature(witness: VerificationNodeData, contract: Signed[Transaction]) -> Signature:
         nc = await network.connect(protocol.address, witness.address)
         wdu = DialogueUtil(nc)
         signature = await request_signature(wdu, protocol, contract)
-        digest = hash(contract.message)
-        signature.validate(digest)
+        signature.validate(contract.message)
         return signature
     
     tasks: list[set[asyncio.Task[Signature]]] = []
     for withdrawal in funds:
         task_set: set[asyncio.Task[Signature]] = set()
-        for witness in withdrawal.receipt_id.contract.witnesses:
+        for witness in withdrawal.witnesses:
             task_set.add(asyncio.create_task(get_signature(witness, countersigned_contract)))
         tasks.append(task_set)
 
@@ -402,16 +404,17 @@ async def transfer_currency(du: DialogueUtil, protocol: StdProtocol, amount: int
             try:
                 signature = finished_task.result()
                 signatures.append(signature)
+                sig_count += 1
             except (network.NetworkException, DialogueException) as e:
                 ...
 
         if sig_count < VERIFIER_REDUNDANCY:
-            raise DialogueException('Not enough signatures')
+            if not NODE_0_PUBLIC_KEY in (sig.public_key for sig in signatures):
+                raise DialogueException('Not enough signatures')
 
     # Validate witness signatures
-    digest = hash(countersigned_contract.message)
     for sig in signatures:
-        sig.validate(digest)
+        sig.validate(countersigned_contract.message)
 
     fully_signed_contract = countersigned_contract.with_signatures(*signatures) # Signed by all witnesses as well
     receipt = Receipt(**vars(fully_signed_contract))
@@ -426,42 +429,34 @@ async def transfer_currency_response(du: DialogueUtil, protocol: StdProtocol):
     # Initial contract
     signed_contract = await du.expect(Signed[Transaction]) # TODO test if this actually works with generics or not
     signed_contract.validate_signatures()
+    validation_flag = not signed_contract.signed_by_N0()
     contract = signed_contract.message
     
-    # Check enough funds are included to cover payment
-    if contract.amount != sum(fund.amount for fund in contract.funds):
-        raise DialogueException('Invalid contract, not enough funds to cover payment')
+    if validation_flag:
+        contract.validate_funds(protocol)
+        contract.validate_selected_witnesses(protocol)
     
-    seed = RNGSeed(contract.payer_public_key, contract.payee_public_key, contract.timestamp)
-    selected_witnesses = contract.witnesses
-    validate_selected_witnesses(protocol, set(selected_witnesses), contract.timestamp, seed)
-    
-    # Validate signatures and selected witnesses for each fund
-    for fund in contract.funds:
-        fund.receipt_id.validate_signatures()
-        fund_contract = fund.receipt_id.contract
-        fund_seed = RNGSeed(fund_contract.payer_public_key, fund_contract.payee_public_key, fund_contract.timestamp)
-        validate_selected_witnesses(protocol, set(fund_contract.witnesses), contract.timestamp, fund_seed)
-
     countersigned_contract = protocol.sign(contract)
     du.reply(countersigned_contract)
     receipt = await du.expect(Receipt) # Fully signed contract.
 
-    # Verify that enough witnesses have signed and validate signatures
-    if selected_witnesses != receipt.contract.witnesses:
-        raise DialogueException('Invalid contract, invalid witnesses')
-        
-    for fund in receipt.contract.funds:
-        signature_count = 0
-        for witness in fund.receipt_id.contract.witnesses:
-            if receipt.signed_by(witness.public_key):
-                signature_count += 1
-
-        if signature_count < VERIFIER_REDUNDANCY:
-            raise DialogueException('Invalid contract, not enough signatures for fund')
-        
     receipt.validate_signatures()
+    validation_flag = not receipt.signed_by_N0()
 
+    if validation_flag:
+        if not receipt.same_as(signed_contract):
+            raise DialogueException('Unrecognized contract')
+
+        # Verify that enough witnesses have signed and validate signatures
+        for fund in receipt.contract.funds:
+            signature_count = 0
+            for witness in fund.witnesses:
+                if receipt.signed_by(witness.public_key):
+                    signature_count += 1
+
+            if signature_count < VERIFIER_REDUNDANCY:
+                raise DialogueException('Invalid contract, not enough signatures for fund')
+        
     du.acknowledge() # Payment is considered sent at this point.
 
     # Anything beyond this point can be done at a later time. The payment is already received we just need to notify the old / new witnesses.
@@ -479,34 +474,68 @@ async def transfer_currency_response(du: DialogueUtil, protocol: StdProtocol):
     connections = tuple(filter(filter_exceptions, connections))
     signatures = await asyncio.gather(*(get_witness_signature(wdu) for wdu in connections), return_exceptions=True)
     signatures = frozenset(filter(filter_exceptions, signatures))
-
-    if len(signatures) < VERIFIER_REDUNDANCY:
-        raise DialogueException('Not enough responses confirming transaction')
-    
     signed_receipt = Signed(message=receipt, signatures=signatures)
+
+    if len(signed_receipt.signatures) < VERIFIER_REDUNDANCY:
+        raise DialogueException('Not enough responses confirming transaction')
     
     await asyncio.gather(*(request_hold_receipt(connection, protocol, signed_receipt) for connection in connections), return_exceptions=True)
     protocol.wallet.update_credit(receipt)
 
 @register_init(DialogueEnum.CONFIRM_STAKE)
-async def confirm_stake(du: DialogueUtil, protocol: StdProtocol, stake: Stake):
+async def confirm_stake(du: DialogueUtil, protocol: StdProtocol, signed_stake: Signed[Stake]):
     """Get's a signature confirming that the stake has been reserved for the relevant funds"""
 
     await du.expect_acknowledgement()
-    du.reply(stake)
+    du.reply(signed_stake)
     return await du.expect(Signature)
         
-
 @register_response(DialogueEnum.CONFIRM_STAKE)
 async def confirm_stake_response(du: DialogueUtil, protocol: StdProtocol):
+    signed_stake = await du.expect(Signed[Stake])
+    signed_stake.validate_signatures()
+    validation_flag = not signed_stake.signed_by_N0()
+    stake = signed_stake.message
+
+    if validation_flag:
+        stake.validate_funds(protocol)
+
+    for fund in stake.funds:
+        if not fund.witnessed_by(protocol.public_key):
+            continue
+
+        if fund.receipt_id not in protocol.receipt_book:
+            raise DialogueException('No record of receipt')
+
+        tracked_fund = protocol.receipt_book[fund.receipt_id]
+        if tracked_fund.available < fund.amount:
+            raise DialogueException('Not enough credit available to cover fund')
+        tracked_fund.reserve_credit(stake)
+
+    signature = protocol.sf.get_signature(stake)
+    du.reply(signature)       
+
     du.acknowledge()
 
-@register_init(DialogueEnum.REQUEST_JOIN_VERIFICATION_NET)
-async def request_join_verification_net(du: DialogueUtil, protocol: StdProtocol):
-    timestamp = time.time()
-    funds = protocol.wallet.find_funds(STAKE_AMOUNT)
+@register_init(DialogueEnum.INFORM_VNT_EVENT)
+async def inform_vnt_event(du: DialogueUtil, protocol: StdProtocol, signed_event_packet: Signed[VNTEventPacket]):
+    await du.expect_acknowledgement()
+    du.reply(signed_event_packet)
+
+@register_response(DialogueEnum.INFORM_VNT_EVENT)
+async def inform_vnt_event_response(du: DialogueUtil, protocol: StdProtocol):
+    du.acknowledge()
+    signed_event_packet = await du.expect(Signed[VNTEventPacket])
+    event = VNTEventFactory.event_from_packet(signed_event_packet)
+    event.validate(protocol)
+    protocol.verification_net_timeline.add(event)
+    
+async def join_verification_net(protocol: StdProtocol):
+    timestamp = cur_time()
+    funds = protocol.wallet.find_funds(STAKE_AMOUNT, protocol.verification_net_timeline)
 
     stake = Stake(
+        uuid=UUID(),
         contract_type=ContractType.STAKE,
         address=protocol.address,
         public_key=protocol.public_key,
@@ -514,36 +543,98 @@ async def request_join_verification_net(du: DialogueUtil, protocol: StdProtocol)
         funds=tuple(funds),
         timestamp=timestamp)
     
+    signed_stake = protocol.sign(stake)
+    
     async def get_signature(witness: VerificationNodeData) -> Signature:
         nc = await network.connect(protocol.address, witness.address)
         wdu = DialogueUtil(nc)
-        signature = await confirm_stake(wdu, protocol, stake)
-        digest = hash(stake)
-        signature.validate(digest)
+        signature = await confirm_stake(wdu, protocol, signed_stake)
+        signature.validate(stake)
         return signature
     
     signature_cr: set[Coroutine[Any, Any, Signature]] = set()
     for fund in funds:
-        for witness in fund.receipt_id.contract.witnesses:
+        for witness in fund.witnesses:
             signature_cr.add(get_signature(witness))
 
     signatures = await asyncio.gather(*signature_cr, return_exceptions=True)
     signatures = frozenset(filter(filter_exceptions, signatures))
 
-    signed_stake = Signed(message=stake, signatures=signatures)
+    for fund in stake.funds:
+        relevant_signatories = set(sig.public_key for sig in signatures if sig.public_key in (witness.public_key for witness in fund.witnesses))
+        
+        if len(relevant_signatories) < VERIFIER_REDUNDANCY:
+            raise DialogueException('Not enough signatures on fund for stake') 
 
-@register_response(DialogueEnum.REQUEST_JOIN_VERIFICATION_NET)
-async def request_join_verification_net_response(du: DialogueUtil, protocol: StdProtocol):
-    du.acknowledge()
+    # You're able to get the rest of the signatures later if you don't have enough
+    # TODO: Make it so you can release your stake if you never join the verification net (delay until eventual consistency same as leaving verification net) 
+
+    signed_stake = Signed(message=stake, signatures=signatures)
+    event_packet = VNTEventFactory.packet_from_data(VerificationNetEventEnum.NODE_JOIN, signed_stake) 
+    event_packet = protocol.sign(event_packet) 
+    join_event = VNTEventFactory.event_from_packet(event_packet) 
+    protocol.verification_net_timeline.add(join_event)
+    protocol.stake = stake
+    await contact_all_verification_nodes(protocol, inform_vnt_event, event_packet)
+        
+async def leave_verification_net(protocol: StdProtocol):
+    timestamp = cur_time()
+
+    stake = protocol.stake 
+    assert(stake is not None)
+    
+    witnesses = tuple(set(witness for fund in stake.funds for witness in fund.witnesses))
+    fund_ids = tuple(fund.receipt_id for fund in stake.funds) 
+    leave_data = LeaveData(stake.uuid, witnesses, fund_ids, timestamp, stake.get_node())
+    event_packet = VNTEventFactory.packet_from_data(VerificationNetEventEnum.NODE_LEAVE, leave_data)
+    event_packet = protocol.sign(event_packet)
+    leave_event = VNTEventFactory.event_from_packet(event_packet) 
+    protocol.verification_net_timeline.add(leave_event)
+    
+    def release_stake():
+        for fund_withdrawal in stake.funds:
+            fund = protocol.wallet.get_fund(fund_withdrawal.receipt_id)
+            fund.release_credit(stake.uuid)
+        protocol.stake = None
+
+    protocol.schedule_event(timestamp + TIME_TO_CONSISTENCY, release_stake)
+    await contact_all_verification_nodes(protocol, inform_vnt_event, event_packet)
+
+async def pause_verification(protocol: StdProtocol):
+    timestamp = cur_time()
+    assert(protocol.stake)
+    
+    node_data = protocol.verification_node_data()
+    pause_data = PauseData(timestamp, node_data)
+    event_packet = VNTEventFactory.packet_from_data(VerificationNetEventEnum.NODE_PAUSE, pause_data)
+    event_packet = protocol.sign(event_packet)
+    pause_event = VNTEventFactory.event_from_packet(event_packet) 
+    protocol.verification_net_timeline.add(pause_event)
+    await contact_all_verification_nodes(protocol, inform_vnt_event, event_packet)
+
+async def resume_verification(protocol: StdProtocol):
+    timestamp = cur_time()
+    assert(protocol.stake)
+    
+    node_data = protocol.verification_node_data()
+    resume_data = ResumeData(timestamp, node_data)
+    event_packet = VNTEventFactory.packet_from_data(VerificationNetEventEnum.NODE_RESUME, resume_data)
+    event_packet = protocol.sign(event_packet)
+    resume_event = VNTEventFactory.event_from_packet(event_packet) 
+    protocol.verification_net_timeline.add(resume_event)
+    await contact_all_verification_nodes(protocol, inform_vnt_event, event_packet)
+
+async def add_entropy(protocol: StdProtocol):
+    timestamp = cur_time()
+    node_data = protocol.verification_node_data()
+    entropy_data = EntropyData(timestamp, node_data, secrets.token_hex())
+    event_packet = VNTEventFactory.packet_from_data(VerificationNetEventEnum.ADD_ENTROPY, entropy_data)
+    event_packet = protocol.sign(event_packet)
+    entropy_event = VNTEventFactory.event_from_packet(event_packet) 
+    protocol.verification_net_timeline.add(entropy_event)
+    await contact_all_verification_nodes(protocol, inform_vnt_event, event_packet)
 
 # TODO
-# Bugfix infinite recursion in receipts. Funds don't need the whole receipt, no information about their own funds needed.
-# Verification network join / leave / pause / unpause / entropy events.
-# Change from eventual consistency with time limit to reach 100% consistency to zero consistency with
-# stat checks for missing events. Instead of failing validation if selected witnesses don't match up
-# exactly find out what events are missing or what extra events are included in the timeline and stat check for
-# each missing event. Transaction include list of event uuids until cutoff (after which we assume consistency).
-# Pay with contract you were a witness on, gas for witnesses.
-# No verification for node 0 on transactions.
 # Rollover.
+# Witnesses get cut of contract, gas for witnesses.
 # Get stake from fraudulent contract and contracts proving funds already ran out.
