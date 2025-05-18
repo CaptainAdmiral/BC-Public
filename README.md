@@ -10,3 +10,5 @@ Removing the need for transaction consensus has the benefit of:
 1) Providing privacy, the details of every transaction do not need to be made public.
 2) Preventing deanonymization based on transaction history.
 3) Allowing the network to operate efficiently and at scale, as the complexity grows linearly with more nodes instead of exponentially.
+
+You'll find the outline of the protocol in src/protocol/dialogue/dialogues
