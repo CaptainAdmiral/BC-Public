@@ -1,2 +1,3 @@
-from abstract_protocol import AbstractProtocol
-from protocol.std_protocol.std_protocol import StdProtocol
+from protocol.protocols.abstract_protocol import AbstractProtocol
+from protocol.protocols.std_protocol.std_protocol import StdProtocol
+from protocol.protocols.zero_protocol.zero_protocol import ZeroProtocol

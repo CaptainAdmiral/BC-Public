@@ -1,84 +1,87 @@
 import functools
-from typing import Callable, Concatenate, Coroutine
-from protocol.dialogue.base_dialogue import DialogueException
-from protocol.dialogue.broadcast import Broadcast
-from protocol.dialogue.const import ControlPacket, DialogueEnum
+import logging
+from typing import TYPE_CHECKING, Callable, Concatenate, Coroutine
+
+from protocol.dialogue.const import DialogueEnum
+from protocol.dialogue.dialogue_types import DialogueException
 from protocol.dialogue.util.dialogue_util import DialogueUtil
-from protocol.std_protocol.std_protocol import StdProtocol
+from settings import LOG_DIALOGUES
 
-DialogueType = Callable[Concatenate[DialogueUtil, StdProtocol, ...], Coroutine]
+if TYPE_CHECKING:
+    from protocol.protocols.abstract_protocol import AbstractProtocol
 
-_INIT_REGISTRY: dict[str, DialogueType] = {}
-RESPONSE_REGISTRY: dict[str, DialogueType] = {}
+type DialogueType = Callable[Concatenate[DialogueUtil, AbstractProtocol, ...], Coroutine]
 
-BROADCAST_REGISTRY: dict[str, Broadcast] = {}
-
-def register_init(key: DialogueEnum):
-    '''Registers an initial dialogue for use by the standard protocol.
-    Modifies the decorated function to send a dialogue identifier first to initiate the dialogue.
-    This was designed as a convenience function for internal use only, nodes running deviant protocols should not register their dialogues with the standard protocol
+# fmt: off
+def dialogue_registrars(dialogue_registry: dict[str, DialogueType], response_registry: dict[str, DialogueType]):
+    """Returns a pair of decorators you can use to register your dialogues and responses with the passed registry objects.
     
-    Decorator for an async function with signature (DialogueUtil, StdProtocol, *args, **kwargs)'''
+    Returns:
+        register_init, register_response"""
     
-    def deco[R, **P](f: Callable[Concatenate[DialogueUtil, StdProtocol, P], Coroutine[None, None, R]]):
-        _INIT_REGISTRY[key] = f
-
-        @functools.wraps(f)
-        async def wrapped(du: DialogueUtil, protocol: StdProtocol, *args: P.args, **kwargs: P.kwargs):
-            try:
-                du.init(key)
-                return await f(du, protocol, *args, **kwargs)
-            except DialogueException as e:
-                du.reply(ControlPacket.ERROR)
-                raise e
+    def register_init(key: DialogueEnum):
+        '''Registers an initial dialogue for use by your protocol.
+        Modifies the decorated function to send a dialogue identifier first to initiate the dialogue.
         
-        return wrapped
-    return deco
+        Decorator for an async function with signature (DialogueUtil, StdProtocol, *args, **kwargs)'''
+        
+        def deco[T: 'AbstractProtocol', R, **P](f: Callable[Concatenate[DialogueUtil, T, P], Coroutine[None, None, R]]):
 
-def register_response(key: DialogueEnum):
-    '''Registers a dialogue response for use by the standard protocol. This was designed as a convenience function for internal use only,
-    nodes running deviant protocols should not register their dialogues with the standard protocol
+            @functools.wraps(f)
+            async def wrapped(du: DialogueUtil, protocol: T, *args: P.args, **kwargs: P.kwargs):
+                if LOG_DIALOGUES:
+                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] New dialogue: {key}")
+                try:
+                    du.init(key)
+                    res = await f(du, protocol, *args, **kwargs)
+                    if du._last_com_type == du.ComType.OUT:
+                        await du.expect_acknowledgement()
+                    return res
+                except DialogueException as e:
+                    e.add_note(f"Raised in init: {key} [{du.net_connection._node.address} | {du.net_connection._other_node.address}]")
+                    du.error() # TODO move to top level dialogue
+                    raise e
+            
+            dialogue_registry[key] = wrapped # type: ignore
+            return wrapped
+        return deco
+
+    def register_response(key: DialogueEnum):
+        '''Registers a dialogue response for use by your protocol.
+        
+        Decorator for an async function with signature (DialogueUtil, AbstractProtocol)'''
+
+        def deco[T: 'AbstractProtocol', R](f: Callable[[DialogueUtil, T], Coroutine[None, None, R]]):
+
+            @functools.wraps(f)
+            async def wrapped(du: DialogueUtil, protocol: T):
+                if LOG_DIALOGUES:
+                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] Expecting dialogue: {key}")
+                try:
+                    await du.expect(key)
+                    res = await f(du, protocol)
+                    if du._last_com_type == du.ComType.IN:
+                        du.acknowledge()
+                    return res
+                except DialogueException as e:
+                    e.add_note(f"Raised in response: {key} [{du.net_connection._node.address} | {du.net_connection._other_node.address}]")
+                    du.error() # TODO move to top level dialogue
+                    raise e
+                            
+            response_registry[key] = wrapped # type: ignore
+            return wrapped
+        return deco
     
-    Decorator for an async function with signature (DialogueUtil, StdProtocol)
-    The decorated function my also take net_con as a keyword argument, which will receive the same NetConnection reference used by DialogueUtil'''
+    return register_init, register_response
+# fmt: on
 
-    def deco[R](f: Callable[[DialogueUtil, StdProtocol], Coroutine[None, None, R]]) -> Callable[[DialogueUtil, StdProtocol], Coroutine[None, None, R]]:
-        RESPONSE_REGISTRY[key] = f
 
-        @functools.wraps(f)
-        async def wrapped(du: DialogueUtil, protocol: StdProtocol):
-            try:
-                await du.expect(key)
-                return await f(du, protocol)
-            except DialogueException as e:
-                du.reply(ControlPacket.ERROR)
-                raise e
-                           
-        return wrapped
-    return deco
+def validate_symetric_dialogues(Protocol: "type[AbstractProtocol]"):
+    init_keys = Protocol.dialogues().keys()
+    res_keys = Protocol.responses().keys()
 
-def register_broadcast(broadcast: Broadcast):
-    '''Registers a broadcast for use by the standard protocol. This was designed as a convenience function for internal use only,
-    nodes running deviant protocols should not register their broadcasts with the standard protocol'''
-
-    BROADCAST_REGISTRY[broadcast.key] = broadcast
-
-def get_response(key: DialogueEnum):
-    if key in RESPONSE_REGISTRY:
-        return RESPONSE_REGISTRY[key]
-    elif key in BROADCAST_REGISTRY:
-        return BROADCAST_REGISTRY[key]
-    else:
-        raise DialogueException(f"Unknown dialogue key: {key}")
-    
-def validate_registries():
-    init_keys = _INIT_REGISTRY.keys()
-    res_keys = RESPONSE_REGISTRY.keys()
-    b_keys = BROADCAST_REGISTRY.keys()
-    
     if init_keys != res_keys:
         missing = init_keys ^ res_keys
-        raise ValueError(f"Missing registry entries for standard protocol. Missing initial or response dialogues for: {', '.join(missing)}")
-    
-    if (intersection := b_keys & res_keys):
-        raise ValueError(f"Duplicate registry entries for standard protocol. The following keys were found in both broadcasts and dialogue registries: {', '.join(intersection)}")
+        raise ValueError(
+            f"Missing registry entries for standard protocol. Missing initial or response dialogues for: {', '.join(missing)}"
+        )

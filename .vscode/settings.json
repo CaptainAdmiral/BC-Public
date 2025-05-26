@@ -1,0 +1,11 @@
+{
+    "python.analysis.typeCheckingMode": "standard",
+    "cSpell.words": [
+        "Behaviour",
+        "keypair",
+        "keypairs",
+        "preimage",
+        "pydantic",
+        "subnetwork"
+    ],
+}

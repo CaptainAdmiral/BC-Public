@@ -3,3 +3,7 @@
 /Include
 /venv
 pyvenv.cfg
+__pycache__/
+profile.out
+pyinstrument_report.html
+*.log

@@ -1,28 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import cast
-from network_emulator import NetConnection
-from protocol.abstract_protocol import AbstractProtocol
+from typing import TYPE_CHECKING, cast
 from protocol.dialogue.const import DialogueEnum
+from protocol.dialogue.dialogue_types import DialogueException, DialogueResult
 
-class DialogueException(Exception):
-    '''Exception with execution of dialogue'''
-    ...
-
-@dataclass
-class DialogueResult[R]:
-    exception: Exception | None
-    success: bool
-    result: R | None = None
-
-    def __bool__(self):
-        if not self.success:
-            return False
-        return bool(self.result)
-    
-    def assumed_result(self) -> R:
-        '''Gets the result assuming the dialogue was successful. (Casts out the None from the result type union)'''
-        return cast(R, self.result)
+if TYPE_CHECKING:
+    from network_emulator.net_connection import NetConnection
+    from protocol.protocols.abstract_protocol import AbstractProtocol
 
 class BaseDialogue[R](ABC):
 
@@ -31,10 +15,10 @@ class BaseDialogue[R](ABC):
         ...
 
     @abstractmethod
-    async def execute(self, protocol: AbstractProtocol, net_con: NetConnection) -> R | None:
+    async def execute(self, protocol: 'AbstractProtocol', net_con: 'NetConnection') -> R | None:
         ...
 
-    async def run(self, protocol: AbstractProtocol, net_con: NetConnection) -> DialogueResult[R]:
+    async def run(self, protocol: 'AbstractProtocol', net_con: 'NetConnection') -> DialogueResult[R]:
         if not net_con.is_open:
             raise NetConnection.NetConnectionClosedException('Net connection must be opened first')
 

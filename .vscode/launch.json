@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run main",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Run verbose",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--verbose"
+      ]
+    },
+    {
+      "name": "Run with cProfile",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "cProfile",
+      "args": [
+        "-o",
+        "${workspaceFolder}/profile.out",
+        "${workspaceFolder}/src/main.py"
+      ],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Run with pyinstrument",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pyinstrument",
+      "args": [
+        "--html",
+        "-o",
+        "${workspaceFolder}/pyinstrument_report.html",
+        "${workspaceFolder}/src/main.py",
+        "--soft-crash"
+      ],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

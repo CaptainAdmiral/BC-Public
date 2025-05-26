@@ -1,8 +1,10 @@
 import json
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel
-from protocol import AbstractProtocol, StdProtocol
+
+if TYPE_CHECKING:
+    from protocol import AbstractProtocol
 
 class BroadcastData(BaseModel):
     rebroadcast_probability: float
@@ -17,12 +19,12 @@ class BroadcastData(BaseModel):
     def __hash__(self):
         return self.hash
 
-class Broadcast[P: AbstractProtocol, T: BroadcastData]:
+class Broadcast[P: 'AbstractProtocol', T: BroadcastData]:
     '''Base broadcast class.
     
     Broadcasts distribute data to every node on the network using a decentralized broadcast protocol'''
     
-    def __init__(self, key: str, on_received: Callable[[T, P]], DataType: type[T], Protocol: type[P] = StdProtocol):
+    def __init__(self, key: str, on_received: Callable[[T, P], Any], DataType: type[T]):
         self.key = key
         self._on_received = on_received
         self.DataType = DataType

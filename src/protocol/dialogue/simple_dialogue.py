@@ -1,6 +1,6 @@
 from typing import Any, override
 from network_emulator import NetConnection
-from protocol.abstract_protocol import AbstractProtocol
+from protocol.protocols.abstract_protocol import AbstractProtocol
 from protocol.dialogue.base_dialogue import BaseDialogue
 from protocol.dialogue.dialogue_graph import DialogueGraph, DialogueInfo
 from protocol.dialogue.const import DialogueEnum

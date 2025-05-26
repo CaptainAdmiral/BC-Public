@@ -1,13 +1,17 @@
 import math
-from typing import Any, Callable, Iterable, Iterator, MutableSequence, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 from util.timestamped import Timestamped
 
 class _ChronologyNode(Timestamped):
     def __init__(self, timestamp: float):
-        self.timestamp = timestamp
+        self._timestamp = timestamp
         self._prev: _ChronologyNode | None = None
         self._next: _ChronologyNode | None = None
         
+    @property
+    def timestamp(self) -> float:
+        return self._timestamp
+
     @property
     def prev(self):
         return self._prev
@@ -34,7 +38,7 @@ class _EpochMarker(_ChronologyNode):
     def __init__(self, timestamp: float):
         super().__init__(timestamp)
 
-class Chronology[T](MutableSequence[T]):
+class Chronology[T]:
     '''Linked list which preserves a sort on it's elements by timestamp'''
     
     def __init__(self,
@@ -59,7 +63,6 @@ class Chronology[T](MutableSequence[T]):
         self._key = key
         self._epoch_length = epoch_length
         self.epochs: list[_EpochMarker] = []
-        self._epoch_t0: float | None = None
         self._len: int = 0
         self._secondary_sort = secondary_sort
 
@@ -73,6 +76,9 @@ class Chronology[T](MutableSequence[T]):
     def __setitem__(self, key, value):
         raise TypeError(f"{self.__class__.__name__} object does not support item assignment")
     
+    def __delitem__(self, index):
+        raise TypeError('f"{self.__class__.__name__} object does not support deletion')
+    
     def __getitem__(self, key: slice) -> Iterator[T]: # type: ignore
         if isinstance(key, int):
             raise TypeError("Must use slice indexing to specify a time range")
@@ -83,22 +89,26 @@ class Chronology[T](MutableSequence[T]):
             raise TypeError("Does not accept step")
         
         return self.bounded_iter(key.start, key.stop)
-    
+
     def bounded_iter(self, start: float | None, stop: float | None) -> Iterator[T]:
         '''Returns an iterator for the given time range in the closed interval [start, stop]'''
 
         if not self._earliest or not self._latest:
             return
         
+        event = None
         if start is None:
             start = self._earliest.timestamp
+            event = self._earliest
         if stop is None:
             stop = self._latest.timestamp
         
         if start > stop:
             raise ValueError('use bounded_riter for iterating backwards in time')
         
-        event = self._latest_before(start)
+        if event is None:
+            event = self._latest_before(start)
+
         while event is not None and event.timestamp <= stop:
             if isinstance(event, _Event):
                 yield event.data
@@ -109,16 +119,20 @@ class Chronology[T](MutableSequence[T]):
 
         if not self._earliest or not self._latest:
             return
-        
+
+        event = None  
         if start is None:
             start = self._latest.timestamp
+            event = self._latest
         if stop is None:
             stop = self._earliest.timestamp
         
         if start < stop:
             raise ValueError('use bounded_iter for iterating forwards in time')
         
-        event = self._latest_before(start)
+        if event is None:
+            event = self._earliest_after(start)
+        
         while event is not None and event.timestamp >= stop:
             if isinstance(event, _Event):
                 yield event.data
@@ -198,13 +212,38 @@ class Chronology[T](MutableSequence[T]):
         
         node = nearest_node
         if nearest_node.timestamp < time:
-            while node._next is not None and node._next.timestamp <= time:
+            while node._next is not None and node.timestamp < time and node._next.timestamp <= time:
                 node = node._next
         else:
-            while node._prev is not None and node._prev.timestamp > time:
+            while node._prev is not None and node._prev.timestamp >= time:
                 node = node._prev
                 
         return node
+    
+    def _earliest_after(self, time: float) -> _ChronologyNode | None:
+        '''
+        Args:
+            time: float
+                cutoff
+
+        Returns:
+            _ChronologyNode: The earliest node occurring after the cutoff (inclusive)'''
+        
+        nearest_node = self._get_nearest_O1(time)
+
+        if nearest_node is None:
+            return None
+        
+        node = nearest_node
+        if nearest_node.timestamp > time:
+            while node._prev is not None and node.timestamp > time and node._prev.timestamp >= time:
+                node = node._prev
+        else:
+            while node._next is not None and node._next.timestamp <= time:
+                node = node._next
+                
+        return node
+    
     
     def add(self, event: T) -> _Event[T]:
         '''Adds an event to the timeline.
@@ -221,8 +260,7 @@ class Chronology[T](MutableSequence[T]):
             self._earliest = wrapped_event
 
             if self._epoch_length:
-                epoch = _EpochMarker(wrapped_event.timestamp)
-                self._epoch_t0 = epoch.timestamp
+                epoch = _EpochMarker(self._epoch_length * (wrapped_event.timestamp // self._epoch_length))
                 self.epochs.append(epoch)
                 wrapped_event._prev = epoch
                 epoch._next = wrapped_event
@@ -231,44 +269,58 @@ class Chronology[T](MutableSequence[T]):
             if wrapped_event.timestamp < self._earliest.timestamp:
 
                 # Add epochs in between earliest epoch and event
-                if self._epoch_length and self._epoch_t0 is not None:
+                if self._epoch_length:
                     assert(self.epochs)
                     earliest_epoch = self.epochs[0]
-                    epoch_int = round((earliest_epoch.timestamp - self._epoch_t0) / self._epoch_length)
-                    new_epoch_int = math.ceil((wrapped_event.timestamp - self._epoch_t0) / self._epoch_length)
-                    new_epochs = [_EpochMarker(self._epoch_t0 + i*self._epoch_length) for i in range(new_epoch_int, epoch_int)]
+                    new_epochs = []
+                    ts = earliest_epoch.timestamp 
+                    epoch_idx = round(ts / self._epoch_length)
+                    while True:
+                        epoch_idx -= 1
+                        ts = self._epoch_length * epoch_idx
+                        if ts < wrapped_event.timestamp:
+                            break
+                        epoch = _EpochMarker(ts)
+                        new_epochs.append(epoch)
 
                     # Link epochs and update pointer to earliest
                     if new_epochs:
-                        prev_node = earliest_epoch
-                        for epoch in reversed(new_epochs):
+                        prev_node = self._earliest
+                        for epoch in new_epochs:
                             prev_node._prev = epoch
                             epoch._next = prev_node
                             prev_node = epoch
                     
-                        self.epochs = new_epochs + self.epochs
+                        self.epochs = list(reversed(new_epochs)) + self.epochs
                         self._earliest = self.epochs[0]
                 
                 self._earliest._prev = wrapped_event
                 wrapped_event._next = self._earliest
                 self._earliest = wrapped_event
 
-            elif wrapped_event.timestamp >= self._latest.timestamp:
+            elif wrapped_event.timestamp > self._latest.timestamp:
 
                 # Add epochs in between latest epoch and event
-                if self._epoch_length and self._epoch_t0 is not None:
+                if self._epoch_length:
                     assert(self.epochs)
                     latest_epoch = self.epochs[-1]
-                    epoch_int = round((latest_epoch.timestamp - self._epoch_t0) / self._epoch_length)
-                    new_epoch_int = math.floor((wrapped_event.timestamp - self._epoch_t0) / self._epoch_length)
-                    new_epochs = [_EpochMarker(self._epoch_t0 + i*self._epoch_length) for i in range(epoch_int+1, new_epoch_int+1)]
+                    new_epochs = []
+                    ts = latest_epoch.timestamp
+                    epoch_idx = round(ts / self._epoch_length)
+                    while True:
+                        epoch_idx += 1
+                        ts = self._epoch_length * epoch_idx
+                        if ts > wrapped_event.timestamp:
+                            break
+                        epoch = _EpochMarker(ts)
+                        new_epochs.append(epoch)
 
                     # Link epochs and update pointer to latest
                     if new_epochs:
-                        prev_node = latest_epoch
+                        prev_node = self._latest
                         for epoch in new_epochs:
-                            prev_node._prev = epoch
-                            epoch._next = prev_node
+                            prev_node._next = epoch
+                            epoch._prev = prev_node
                             prev_node = epoch
                     
                         self.epochs += new_epochs
@@ -281,43 +333,23 @@ class Chronology[T](MutableSequence[T]):
             else:
                 node = self._latest_before(wrapped_event.timestamp)
                 assert(node is not None)
-                
-                node._next._prev = wrapped_event # type: ignore
+
+                if self._secondary_sort is not None:
+                    while node._next and node.timestamp == node._next.timestamp:
+                        if isinstance(node, _Event) and isinstance(node._next, _Event):
+                            if self._secondary_sort(node._next.data) < self._secondary_sort(wrapped_event.data):
+                                break
+                        node = node._next
+
+                if node._next is not None:
+                    node._next._prev = wrapped_event
                 wrapped_event._next = node._next
                 node._next = wrapped_event
                 wrapped_event._prev = node
 
         self._len += 1
-        
-        if isinstance(wrapped_event._prev, _Event):
-            if wrapped_event._prev.timestamp == wrapped_event.timestamp and self._secondary_sort is not None:
-                if self._secondary_sort(wrapped_event.data) < self._secondary_sort(wrapped_event._prev.data):
-                    # Swap nodes
-                    prev = wrapped_event._prev
-                    prev_prev = wrapped_event._prev._prev
-                    next =  wrapped_event._next
-
-                    wrapped_event._prev._prev = wrapped_event
-                    wrapped_event._prev._next = next
-                    wrapped_event._prev = prev_prev
-                    wrapped_event._next = prev
-
-        if isinstance(wrapped_event._next, _Event):
-            if wrapped_event._next.timestamp == wrapped_event.timestamp and self._secondary_sort is not None:
-                if self._secondary_sort(wrapped_event._next.data) < self._secondary_sort(wrapped_event.data):
-                    
-                    # Swap nodes
-                    next = wrapped_event._next
-                    next_next = wrapped_event._next._next
-                    prev = wrapped_event._prev
-
-                    wrapped_event._next._next = wrapped_event
-                    wrapped_event._next._prev = prev
-                    wrapped_event._next = next_next
-                    wrapped_event._prev = next
-
         return wrapped_event
-    
+        
     def earliest(self):
         return next(iter(self), None)
     

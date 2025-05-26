@@ -1,10 +1,10 @@
 from types import NoneType
 from typing import Callable
-from protocol.abstract_protocol import AbstractProtocol
+from protocol.protocols.abstract_protocol import AbstractProtocol
 from protocol.dialogue.const import ControlPacket
 from protocol.dialogue.dialogue_graph import DataType, DialogueGraph, DialogueInfo
 from protocol.dialogue.const import DialogueEnum
-from protocol.std_protocol.std_protocol import StdProtocol
+from protocol.protocols.std_protocol.std_protocol import StdProtocol
 
 class DialogueGraphWrapper[A, P: AbstractProtocol, T1, T2, R1, R2]:
 

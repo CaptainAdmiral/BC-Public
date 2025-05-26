@@ -3,7 +3,7 @@ from dataclasses import dataclass, is_dataclass
 from functools import cache
 from typing import Any, Hashable
 
-from cryptography.util import PrivateKey, PublicKey, dataclass_to_bytes
+from crypto.util import PrivateKey, PublicKey, to_bytes
 from settings import NODE_0_PUBLIC_KEY
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class Signature:
 
     def validate(self, message: Any):
         if is_dataclass(message):
-            message_bytes = dataclass_to_bytes(message)
+            message_bytes = to_bytes(message)
         else:
             message_bytes = bytes(message)
         
@@ -64,7 +64,7 @@ class SignatureFactory:
 
     def get_signature(self, message: Any):
         if is_dataclass(message):
-            message = dataclass_to_bytes(message)
+            message = to_bytes(message)
         else:
             message = bytes(message)
 

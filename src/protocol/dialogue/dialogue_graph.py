@@ -3,12 +3,12 @@ from types import NoneType
 from typing import Any, Awaitable, Callable, Optional, Self, cast, override
 from abc import ABC, abstractmethod
 from network_emulator import NetConnection
-from protocol.abstract_protocol import AbstractProtocol
+from protocol.protocols.abstract_protocol import AbstractProtocol
 from protocol.dialogue.base_dialogue import BaseDialogue, DialogueException, DialogueResult
 from protocol.dialogue.const import ControlPacket
 from protocol.dialogue.util.dialogue_util import DialogueUtil, DataType
 from protocol.dialogue.const import DialogueEnum
-from protocol.std_protocol.std_protocol import StdProtocol
+from protocol.protocols.std_protocol.std_protocol import StdProtocol
 from util.documentation import get_referenced
 
 class DialogueGraphException(Exception):
