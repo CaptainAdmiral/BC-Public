@@ -62,11 +62,14 @@ class AbstractProtocol(ABC):
         return responses[dialogue_key]
 
     async def _monitor_net_connection(self, net_con: "NetConnection"):
+        # TODO log these tasks for debugging hanging net connections and dialogues later
         with net_con:
             while net_con.is_open:
                 du = DialogueUtil(net_con)
                 try:
                     dialogue_key_str = await net_con.peak()
+                    if dialogue_key_str == ControlPacket.CLOSE:
+                        continue
                     assert dialogue_key_str is not None
                     dialogue_key_str = dialogue_key_str[1:-1] # Strip quotes
                     dialogue_key = cast(DialogueEnum, dialogue_key_str)

@@ -18,6 +18,7 @@ class DialogueEnum(StrEnum):
     CONFIRM_STAKE = auto()
 
 class ControlPacket(StrEnum):
+    CLOSE = auto()
     ACKNOWLEDGEMENT = 'ok'
     REFUSAL = auto()
     ERROR = auto()

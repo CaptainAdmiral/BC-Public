@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from async_manager import add_async_task
 from network_emulator import network
 from network_emulator.network_exceptions import NetworkException
+from protocol.dialogue.const import ControlPacket
 from settings import get_verbose
 
 if TYPE_CHECKING:
@@ -19,9 +20,6 @@ class NetConnection:
     """
 
     _network_traffic_tasks: set[asyncio.Task] = set()
-
-    class Packets(StrEnum):
-        CLOSE = "close"
 
     class NetConnectionClosedException(NetworkException):
         """Raised when write operations are attempted on a closed NetConnection"""
@@ -125,7 +123,7 @@ class NetConnection:
                 "Cannot call close on a net connection before opening it"
             )
 
-        self.write_out(self.Packets.CLOSE)
+        self.write_out(ControlPacket.CLOSE)
         self._handle_close()
 
     async def read_in(self, blocking=True) -> str | None:
@@ -146,10 +144,6 @@ class NetConnection:
             self._read_event.clear()
             self.in_waiting = False
 
-        if s == self.Packets.CLOSE:
-
-            self._handle_close()
-            return await self.read_in(blocking=blocking)
         return s
 
     async def peak(self, blocking=True) -> str | None:
@@ -195,6 +189,10 @@ class NetConnection:
     def receive_packet(self, pkt: str):
         if get_verbose():
             logging.info(f"[{self._other_node.address} -> {self._node.address}] {pkt}")
+
+        if pkt == "close":
+            self._handle_close()
+        
         self.in_waiting = True
         self._read_buffer.append(str(pkt))
         self._read_event.set()

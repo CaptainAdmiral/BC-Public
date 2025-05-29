@@ -1,9 +1,12 @@
 import base64
 from dataclasses import dataclass, is_dataclass
 from functools import cache
+import json
 from typing import Any, Hashable
+from cryptography.exceptions import InvalidSignature
 
 from crypto.util import PrivateKey, PublicKey, to_bytes
+from protocol.dialogue.dialogue_types import DialogueException
 from settings import NODE_0_PUBLIC_KEY
 
 @dataclass(frozen=True)
@@ -17,11 +20,14 @@ class Signature:
         if is_dataclass(message):
             message_bytes = to_bytes(message)
         else:
-            message_bytes = bytes(message)
+            message_bytes = json.dumps(message).encode()
         
         public_key = PublicKey.from_pem(self.public_key)
         signature = base64.b64decode(self.signature)
-        public_key.verify(signature, message_bytes)
+        try:
+            public_key.verify(signature, message_bytes)
+        except InvalidSignature:
+            raise DialogueException("Invalid signature")
         
 @dataclass(frozen=True)
 class Signed[T]:
@@ -66,7 +72,7 @@ class SignatureFactory:
         if is_dataclass(message):
             message = to_bytes(message)
         else:
-            message = bytes(message)
+            message = json.dumps(message).encode()
 
         signature = self.private_key.sign(message)
         return Signature(address=self.address, public_key=self.public_key.as_str(), signature=signature)

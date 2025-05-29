@@ -22,6 +22,7 @@ from protocol.dialogue.util.rng_seed import RNGSeed
 from protocol.dialogue.util.witness_selection_util import (
     SelectedNode,
     select_witnesses,
+    validate_signature_count,
     validate_skips,
 )
 from protocol.protocols.abstract_protocol import AbstractProtocol
@@ -390,14 +391,7 @@ async def reconfirm_transaction_response(du: DialogueUtil, protocol: "StdProtoco
     if validation_flag:
         if not receipt.signed_by(protocol.public_key):
             raise DialogueException("Missing own signature")
-        relevant_sigs = set(
-            sig
-            for sig in signed_receipt.signatures
-            for witness in receipt.message.witnesses
-            if witness.public_key == sig.public_key
-        )
-        if len(relevant_sigs) < VERIFIER_REDUNDANCY:
-            raise DialogueException("Not enough signatures")
+        validate_signature_count(receipt.contract.witnesses, signed_receipt.signatures)
 
     # TODO make it possible to claim the stake from other witnesses by providing signed contracts in excess of available funds
 
@@ -431,15 +425,8 @@ async def request_hold_receipt_response(du: DialogueUtil, protocol: "StdProtocol
 
     validation_flag = not signed_receipt.signed_by_N0
 
-    relevant_signatures = set(
-        sig
-        for sig in signed_receipt.signatures
-        for witness in signed_receipt.message.contract.witnesses
-        if sig.public_key == witness.public_key
-    )
-    if len(relevant_signatures) < VERIFIER_REDUNDANCY:
-        if not validation_flag:
-            raise DialogueException("Not enough signatures")
+    if validation_flag:
+        validate_signature_count(signed_receipt.message.contract.witnesses, signed_receipt.signatures)
 
     signed_receipt.validate_signatures()
     receipt = signed_receipt.message
@@ -619,7 +606,7 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
     # Initial contract
     signed_contract = await du.expect(
         Signed[Transaction]
-    )  # TODO test if this actually works with generics or not
+    )
     signed_contract.validate_signatures()
     validation_flag = not signed_contract.signed_by_N0()
     contract = signed_contract.message
@@ -639,17 +626,8 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
         if not receipt.same_as(signed_contract):
             raise DialogueException("Unrecognized contract")
 
-        # Verify that enough witnesses have signed and validate signatures
         for fund in receipt.contract.funds:
-            signature_count = 0
-            for witness in fund.witnesses:
-                if receipt.signed_by(witness.public_key):
-                    signature_count += 1
-
-            if signature_count < VERIFIER_REDUNDANCY:
-                raise DialogueException(
-                    "Invalid contract, not enough signatures for fund"
-                )
+            validate_signature_count(fund.witnesses, receipt.signatures)
 
     du.acknowledge()  # Payment is considered sent at this point.
 
@@ -659,43 +637,67 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
 
     async def connect_to_witness(witness: VerificationNodeData) -> DialogueUtil:
         nc = await network.connect(protocol.address, witness.address)
+        nc.open()
         return DialogueUtil(nc)
 
     async def get_witness_signature(connection: DialogueUtil):
         return await confirm_transaction(connection, protocol, receipt)
-
+    
+    witnesses = set(witness for fund in final_contract.funds for witness in fund.witnesses)
+    
     connections = await asyncio.gather(
-        *(connect_to_witness(witness) for witness in final_contract.witnesses),
+        *(connect_to_witness(witness) for witness in witnesses),
         return_exceptions=True
     )
     connections = tuple(filter(filter_exceptions, connections))
-    signatures = await asyncio.gather(
-        *(get_witness_signature(wdu) for wdu in connections), return_exceptions=True
-    )
-    signatures = frozenset(filter(filter_exceptions, signatures))
-    signed_receipt = Signed(message=receipt, signatures=signatures)
 
-    async def get_final_signature(connection: DialogueUtil):
-        return await reconfirm_transaction(connection, protocol, signed_receipt)
+    try:
+        signatures = await asyncio.gather(
+            *(get_witness_signature(wdu) for wdu in connections), return_exceptions=True
+        )
+        signatures = frozenset(filter(filter_exceptions, signatures))
 
-    signatures = await asyncio.gather(
-        *(get_final_signature(wdu) for wdu in connections), return_exceptions=True
-    )
-    signatures = frozenset(filter(filter_exceptions, signatures))
-    signed_signed_receipt = Signed(message=signed_receipt, signatures=signatures)
+        for fund in final_contract.funds:
+            validate_signature_count(fund.witnesses, signatures)
 
-    if len(signed_signed_receipt.signatures) < VERIFIER_REDUNDANCY:
-        raise DialogueException("Not enough responses confirming transaction")
+        signed_receipt = Signed(message=receipt, signatures=signatures)
 
-    await asyncio.gather(
-        *(
-            request_hold_receipt(connection, protocol, signed_receipt)
-            for connection in connections
-        ),
+        async def get_final_signature(connection: DialogueUtil):
+            return await reconfirm_transaction(connection, protocol, signed_receipt)
+
+        signatures = await asyncio.gather(
+            *(get_final_signature(wdu) for wdu in connections), return_exceptions=True
+        )
+        signatures = frozenset(filter(filter_exceptions, signatures))
+
+        for fund in final_contract.funds:
+            validate_signature_count(fund.witnesses, signatures)
+
+        signed_signed_receipt = Signed(message=signed_receipt, signatures=signatures) # We don't need to do anything with this, we just need to make sure we have it
+
+    finally:
+        for connection in connections:
+            connection.net_connection.close()
+
+    witness_connections = await asyncio.gather(
+        *(connect_to_witness(witness) for witness in final_contract.witnesses),
         return_exceptions=True
     )
-    protocol.wallet.update_credit(receipt)
+    witness_connections = tuple(filter(filter_exceptions, witness_connections))
+    try:
+        await asyncio.gather(
+            *(
+                request_hold_receipt(connection, protocol, signed_receipt)
+                for connection in witness_connections
+            ),
+            return_exceptions=True
+        )
+        protocol.wallet.update_credit(receipt)
 
+    finally:
+        for connection in witness_connections:
+            connection.net_connection.close()
+        
 
 @register_init(DialogueEnum.CONFIRM_STAKE)
 async def confirm_stake(
@@ -787,14 +789,7 @@ async def join_verification_net(protocol: "StdProtocol"):
     signatures = frozenset(filter(filter_exceptions, signatures))
 
     for fund in stake.funds:
-        relevant_signatories = set(
-            sig.public_key
-            for sig in signatures
-            if sig.public_key in (witness.public_key for witness in fund.witnesses)
-        )
-
-        if len(relevant_signatories) < VERIFIER_REDUNDANCY:
-            raise DialogueException("Not enough signatures on fund for stake")
+        validate_signature_count(fund.witnesses, signatures)
 
     # You're able to get the rest of the signatures later if you don't have enough
     # TODO: Make it so you can release your stake if you never join the verification net (delay until eventual consistency same as leaving verification net)

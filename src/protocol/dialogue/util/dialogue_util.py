@@ -1,11 +1,13 @@
 import json
 from enum import Enum, auto
-from typing import Any, cast, get_origin
+from typing import TYPE_CHECKING, Any, cast, get_origin
 
-from network_emulator.net_connection import NetConnection
 from protocol.dialogue.const import ControlPacket, DialogueEnum
 from protocol.dialogue.dialogue_types import DialogueException
 from util.type_adapters import get_type_adapter
+
+if TYPE_CHECKING:
+    from network_emulator.net_connection import NetConnection
 
 
 class DialogueUtil:
@@ -13,7 +15,7 @@ class DialogueUtil:
         OUT = auto()
         IN = auto()
 
-    def __init__(self, net_connection: NetConnection):
+    def __init__(self, net_connection: 'NetConnection'):
         self.net_connection = net_connection
         self._last_com_type: DialogueUtil.ComType | None = None
         self._errored = False

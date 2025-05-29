@@ -4,10 +4,7 @@ from protocol.dialogue.zero_dialogues import DIALOGUES, RESPONSES
 import timeline
 from crypto.signature import SignatureFactory, Signed
 from crypto.util import PrivateKey, PublicKey
-from network_emulator import network
-from network_emulator.net_connection import NetConnection
 from protocol.dialogue.const import DialogueEnum
-from protocol.dialogue.util.dialogue_util import DialogueUtil
 from protocol.protocols.abstract_protocol import AbstractProtocol
 from protocol.protocols.common_types import NodeData, VerificationNodeData
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
@@ -57,20 +54,6 @@ class ZeroProtocol(AbstractProtocol):
 
     def verification_node_data(self) -> VerificationNodeData:
         return VerificationNodeData(self.address, self.public_key, 0)
-
-    async def _monitor_net_connection(self, net_con: NetConnection):
-        with net_con:
-            while net_con.is_open:
-                dialogue_key = cast(DialogueEnum, await net_con.read_in())
-                assert dialogue_key is not None
-                dialogue = self.get_response(dialogue_key)
-                if isinstance(dialogue, Callable):
-                    du = DialogueUtil(net_con)
-                    await dialogue(du, self, net_con=net_con)
-
-    def accept_net_connection(self, net_con: NetConnection):
-        """Accepts an incoming net connection"""
-        self.add_task(self._monitor_net_connection(net_con))
 
     def schedule_event(self, time: float, callback: Callable):
         timeline.schedule_event(time, callback)

@@ -23,3 +23,8 @@ def add_async_task(coro: Coroutine):
     task = asyncio.create_task(exception_wrapper(coro))
     tasks.add(task)
     task.add_done_callback(tasks.discard)
+
+async def wait_all_tasks():
+    if not tasks:
+        return
+    await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)

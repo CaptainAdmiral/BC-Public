@@ -8,6 +8,7 @@ from crypto.signature import Signed
 from crypto.util import to_sha256
 from protocol.credit.credit_types import Stake
 from protocol.dialogue.dialogue_types import DialogueException
+from protocol.dialogue.util.witness_selection_util import validate_signature_count
 from protocol.protocols.common_types import VerificationNodeData
 from settings import TIME_TO_CONSISTENCY, VERIFIER_REDUNDANCY
 from timeline import cur_time
@@ -168,14 +169,7 @@ class JoinEvent(VerificationNetEvent[JoinData]):
 
         stake.validate_funds(vnt)
         for fund in stake.funds:
-            relevant_signatories = set(
-                sig.public_key
-                for sig in self.signed_vnt_packet.signatures
-                if sig.public_key in (witness.public_key for witness in fund.witnesses)
-            )
-
-            if len(relevant_signatories) < VERIFIER_REDUNDANCY:
-                raise DialogueException("Not enough signatures on fund for stake")
+            validate_signature_count(fund.witnesses, self.signed_vnt_packet.signatures)
 
             for witness in fund.witnesses:
                 if not signed_stake.signed_by(witness.public_key):

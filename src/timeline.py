@@ -9,7 +9,7 @@ class TimeListener(Protocol):
         '''Immediately schedules the returned timestamped callables before the time change takes place'''
         ...
 
-_time: float = 0
+_time: float = 0.0
 subscribers: set[TimeListener]  = set()
 scheduled_events: SortedList = SortedList(key=lambda te: te[0])
 

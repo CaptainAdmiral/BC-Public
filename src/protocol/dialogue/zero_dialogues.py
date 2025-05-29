@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.log import logger
 import uuid
 from typing import TYPE_CHECKING, Optional
 
@@ -90,6 +91,7 @@ async def find_latest_checksum(
     if same_vnt:
         latest = protocol.verification_net_timeline.latest()
         assert latest is not None
+        du.reply(ControlPacket.SUCCESS)
         return latest.checksum
 
     du.reply(ControlPacket.FAILURE)
@@ -128,7 +130,9 @@ async def find_latest_checksum_response(
 ) -> str | None:
     du.acknowledge()
     await check_same_vnt_response(du, protocol)
-    await du.expect(ControlPacket.FAILURE)
+    success_packet = await du.expect(ControlPacket)
+    if success_packet == ControlPacket.SUCCESS:
+        return
     du.acknowledge()
     checksums = await du.expect(list[str])
 

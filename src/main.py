@@ -4,6 +4,7 @@ import logging
 import uuid
 from typing import cast
 
+from async_manager import wait_all_tasks
 from network_emulator.node import Node, ProtocolSelectionBehaviour
 from protocol import protocol_factory
 from protocol.credit.credit_types import ContractType, Stake
@@ -102,7 +103,9 @@ async def initialize_network():
 
 async def async_main():
     await initialize_network()
+    await wait_all_tasks()
     await run()
+    await wait_all_tasks()
 
 
 async def soft_exit_async_main():

@@ -23,7 +23,7 @@ Running with the --soft-crash flag will enable graceful shutdown of the program 
 # Why?
 
 The blockchain protocols are an incredible tool for creating decentralized networks, but they're horribly inefficient and fail to deliver on some of their key promises.
-For example bitcoin is supposed to be decentralized but single entities have surpassed 50% of the compute of the network on multiple occasions (GHash.io in 2014, AntPool + FoundryUSA in 2024 etc).
+For example Bitcoin is supposed to be decentralized but single entities have surpassed 50% of the compute of the network on multiple occasions (GHash.io in 2014, AntPool + FoundryUSA in 2024 etc).
 
 Furthermore they don't scale very well, as the number of transactions per unit time and the amount of compute keeping those transactions secure both scale with the number of people on the network. Each new node increases the total compute, storage, and network requirements exponentially.
 

@@ -118,7 +118,7 @@ class Transaction(Contract):
 
 @dataclass(frozen=True)
 class Receipt(Signed[Transaction]):
-    uuid: UUID
+    message: Transaction
 
     @property
     def contract(self):
@@ -127,10 +127,10 @@ class Receipt(Signed[Transaction]):
     @property
     @cache
     def id(self):
-        return to_sha256(self)
+        return to_sha256(self.message)
 
     def __hash__(self):
-        return hash(self.uuid)
+        return hash(self.message)
 
 
 @dataclass(frozen=True)

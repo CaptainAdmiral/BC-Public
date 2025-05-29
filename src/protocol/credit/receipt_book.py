@@ -4,7 +4,7 @@ from protocol.credit.credit_types import FundWithdrawal, Receipt
 class ReceiptBook:
     
     def __init__(self) -> None:
-        self._tracked_funds: dict[str, TrackedFund]
+        self._tracked_funds: dict[str, TrackedFund] = {}
 
     def update_credit(self, withdrawal: FundWithdrawal, receipt: Receipt):
         '''Updates the internally tracked credit based on the receipt'''
@@ -28,5 +28,5 @@ class ReceiptBook:
     
     def __contains__(self, item: Receipt | str):
         if isinstance(item, Receipt):
-            return item.uuid in self._tracked_funds
+            return item.id in self._tracked_funds
         return item in self._tracked_funds
