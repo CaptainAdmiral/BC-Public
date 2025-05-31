@@ -1,6 +1,6 @@
 import asyncio
-from asyncio.log import logger
 import uuid
+from asyncio.log import logger
 from typing import TYPE_CHECKING, Optional
 
 from crypto.signature import Signed

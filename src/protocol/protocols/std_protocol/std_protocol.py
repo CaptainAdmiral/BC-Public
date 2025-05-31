@@ -102,10 +102,8 @@ class StdProtocol(AbstractProtocol):
         nc = await net.connect(self.address, payee.address)
         du = DialogueUtil(nc)
         await self.dialogues()[DialogueEnum.TRANSFER_CREDIT](du, self, amount, payee)
-    
+
     async def request_missing_events_from(self, node: NodeData):
         nc = await net.connect(self.address, node.address)
         du = DialogueUtil(nc)
         await self.dialogues()[DialogueEnum.TRANSFER_CREDIT](du, self)
-    
-

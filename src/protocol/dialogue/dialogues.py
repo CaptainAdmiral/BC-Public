@@ -22,6 +22,7 @@ from protocol.dialogue.util.rng_seed import RNGSeed
 from protocol.dialogue.util.witness_selection_util import (
     SelectedNode,
     select_witnesses,
+    time_of_witness_selection,
     validate_signature_count,
     validate_skips,
 )
@@ -322,7 +323,9 @@ async def request_signature_response(du: DialogueUtil, protocol: "StdProtocol"):
 
     contract = signed_contract.message
     if validation_flag:
-        contract.validate_selected_witnesses(protocol)
+        contract.validate_selected_witnesses(
+            protocol, signed_contract.message.timestamp
+        )
 
     relevant_funds = (
         fund for fund in contract.funds if fund.witnessed_by(protocol.public_key)
@@ -363,38 +366,9 @@ async def confirm_transaction_response(du: DialogueUtil, protocol: "StdProtocol"
     if validation_flag:
         if not receipt.signed_by(protocol.public_key):
             raise DialogueException("Missing own signature")
-
-    du.reply(protocol.sf.get_signature(receipt))
-
-
-@register_init(DialogueEnum.RECONFIRM_TRANSACTION)
-async def reconfirm_transaction(
-    du: DialogueUtil, protocol: "StdProtocol", signed_receipt: Signed[Receipt]
-) -> Signature:
-    # We need to reconfirm the transaction to ensure that every witness has seen a copy signed by every witness. This means
-    # that any deviant protocols attempting to cooperate must risk their stake if even a single node chooses to defect.
-    await du.expect_acknowledgement()
-    du.reply(signed_receipt)
-    sig = await du.expect(Signature)
-    sig.validate(signed_receipt)
-    return sig
-
-
-@register_response(DialogueEnum.RECONFIRM_TRANSACTION)
-async def reconfirm_transaction_response(du: DialogueUtil, protocol: "StdProtocol"):
-    du.acknowledge()
-    signed_receipt = await du.expect(Signed[Receipt])
-    receipt = signed_receipt.message
-    receipt.validate_signatures()
-    validation_flag = not receipt.signed_by_N0()
-
-    if validation_flag:
-        if not receipt.signed_by(protocol.public_key):
-            raise DialogueException("Missing own signature")
-        validate_signature_count(receipt.contract.witnesses, signed_receipt.signatures)
+        validate_signature_count(receipt.contract.witnesses, receipt.signatures)
 
     # TODO make it possible to claim the stake from other witnesses by providing signed contracts in excess of available funds
-
     relevant_funds = (
         fund
         for fund in receipt.contract.funds
@@ -404,7 +378,7 @@ async def reconfirm_transaction_response(du: DialogueUtil, protocol: "StdProtoco
     for fund in relevant_funds:
         protocol.receipt_book.update_credit(fund, receipt)
 
-    du.reply(protocol.sf.get_signature(signed_receipt))
+    du.reply(protocol.sf.get_signature(receipt))
 
 
 @register_init(DialogueEnum.REQUEST_HOLD_RECEIPT)
@@ -426,7 +400,9 @@ async def request_hold_receipt_response(du: DialogueUtil, protocol: "StdProtocol
     validation_flag = not signed_receipt.signed_by_N0
 
     if validation_flag:
-        validate_signature_count(signed_receipt.message.contract.witnesses, signed_receipt.signatures)
+        validate_signature_count(
+            signed_receipt.message.contract.witnesses, signed_receipt.signatures
+        )
 
     signed_receipt.validate_signatures()
     receipt = signed_receipt.message
@@ -514,7 +490,10 @@ async def transfer_credit(
         raise DialogueException("Not enough funds to cover transfer")
 
     for fund in funds:
-        fund.validate_missing_events(protocol)
+        fund.validate_missing_events(
+            protocol.verification_net_timeline,
+            time_of_witness_selection(fund.timestamp, timestamp),
+        )
 
     # Create and send contract
     initial_contract = Transaction(
@@ -604,16 +583,14 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
         du.acknowledge()
 
     # Initial contract
-    signed_contract = await du.expect(
-        Signed[Transaction]
-    )
+    signed_contract = await du.expect(Signed[Transaction])
     signed_contract.validate_signatures()
     validation_flag = not signed_contract.signed_by_N0()
     contract = signed_contract.message
 
     if validation_flag:
-        contract.validate_funds(protocol)
-        contract.validate_selected_witnesses(protocol)
+        contract.validate_funds(protocol, contract.timestamp)
+        contract.validate_selected_witnesses(protocol, contract.timestamp)
 
     countersigned_contract = protocol.sign(contract)
     du.reply(countersigned_contract)
@@ -642,12 +619,13 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
 
     async def get_witness_signature(connection: DialogueUtil):
         return await confirm_transaction(connection, protocol, receipt)
-    
-    witnesses = set(witness for fund in final_contract.funds for witness in fund.witnesses)
-    
+
+    witnesses = set(
+        witness for fund in final_contract.funds for witness in fund.witnesses
+    )
+
     connections = await asyncio.gather(
-        *(connect_to_witness(witness) for witness in witnesses),
-        return_exceptions=True
+        *(connect_to_witness(witness) for witness in witnesses), return_exceptions=True
     )
     connections = tuple(filter(filter_exceptions, connections))
 
@@ -662,22 +640,23 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
 
         signed_receipt = Signed(message=receipt, signatures=signatures)
 
-        async def get_final_signature(connection: DialogueUtil):
-            return await reconfirm_transaction(connection, protocol, signed_receipt)
-
-        signatures = await asyncio.gather(
-            *(get_final_signature(wdu) for wdu in connections), return_exceptions=True
-        )
-        signatures = frozenset(filter(filter_exceptions, signatures))
-
-        for fund in final_contract.funds:
-            validate_signature_count(fund.witnesses, signatures)
-
-        signed_signed_receipt = Signed(message=signed_receipt, signatures=signatures) # We don't need to do anything with this, we just need to make sure we have it
-
     finally:
         for connection in connections:
             connection.net_connection.close()
+
+    await distribute_receipt(du, protocol, signed_receipt)
+
+
+async def distribute_receipt(
+    du: DialogueUtil, protocol: "StdProtocol", signed_receipt: Signed[Receipt]
+):
+    receipt = signed_receipt.message
+    final_contract = receipt.contract
+
+    async def connect_to_witness(witness: VerificationNodeData) -> DialogueUtil:
+        nc = await network.connect(protocol.address, witness.address)
+        nc.open()
+        return DialogueUtil(nc)
 
     witness_connections = await asyncio.gather(
         *(connect_to_witness(witness) for witness in final_contract.witnesses),
@@ -697,7 +676,7 @@ async def transfer_credit_response(du: DialogueUtil, protocol: "StdProtocol"):
     finally:
         for connection in witness_connections:
             connection.net_connection.close()
-        
+
 
 @register_init(DialogueEnum.CONFIRM_STAKE)
 async def confirm_stake(
@@ -718,7 +697,7 @@ async def confirm_stake_response(du: DialogueUtil, protocol: "StdProtocol"):
     stake = signed_stake.message
 
     if validation_flag:
-        stake.validate_funds(protocol.verification_net_timeline)
+        stake.validate_funds(protocol.verification_net_timeline, stake.timestamp)
 
     for fund in stake.funds:
         if not fund.witnessed_by(protocol.public_key):
@@ -888,6 +867,6 @@ async def add_entropy(protocol: "StdProtocol"):
 
 
 # TODO
-# Rollover.
+# Rollover, payee sends receipt with tracked withdrawals signed by old witnesses to all new witnesses.
 # Witnesses get cut of contract, gas for witnesses.
 # Get stake from fraudulent contract and contracts proving funds already ran out.

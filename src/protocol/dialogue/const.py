@@ -12,7 +12,6 @@ class DialogueEnum(StrEnum):
     TRANSFER_CREDIT = auto()
     REQUEST_WITNESS_SIGNATURE = auto()
     CONFIRM_TRANSACTION = auto()
-    RECONFIRM_TRANSACTION = auto()
     REQUEST_HOLD_RECEIPT = auto()
     INFORM_VNT_EVENT = auto()
     CONFIRM_STAKE = auto()

@@ -18,21 +18,27 @@ from protocol.dialogue.util.stat import (
     check_total_skipped,
 )
 from protocol.protocols.common_types import VerificationNodeData
-from settings import NODE_0_PUBLIC_KEY, TRANSACTION_WITNESSES, VERIFIER_REDUNDANCY
+from settings import (
+    NODE_0_PUBLIC_KEY,
+    ROLLOVER_PERIOD,
+    TIME_TO_CONSISTENCY,
+    TRANSACTION_WITNESSES,
+    VERIFIER_REDUNDANCY,
+)
 
 if TYPE_CHECKING:
+    from network_emulator.net_connection import NetConnection
     from protocol.protocols.abstract_protocol import AbstractProtocol
     from protocol.verification_net.verification_net_timeline import (
         VerificationNetTimeline,
     )
     from protocol.verification_net.vnt_types import VerificationNetEvent
-    from network_emulator.net_connection import NetConnection
 
 
 @dataclass
 class SelectedNode:
     node: VerificationNodeData
-    net_con: 'NetConnection'
+    net_con: "NetConnection"
 
     def dialogue_util(self):
         return DialogueUtil(self.net_con)
@@ -47,14 +53,27 @@ class SelectedWitnesses:
             witness.net_con.close()
 
 
+def time_of_witness_selection(original_cutoff: float, cur_time: float):
+    """The witnesses holding transaction receipts rotate periodically.
+    This function will return the timestamp of when the witnesses currently holding
+    the receipt were selected"""
+
+    if original_cutoff > cur_time - TIME_TO_CONSISTENCY:
+        return original_cutoff
+    else:
+        return original_cutoff + ROLLOVER_PERIOD * (
+            ((cur_time - TIME_TO_CONSISTENCY) - original_cutoff) // ROLLOVER_PERIOD
+        )
+
+
 def witness_selection_iter(
     vnt: "VerificationNetTimeline",
-    cutoff: float,
+    time_of_selection: float,
     rng_seed: RNGSeed,
     missing_event_ids: Optional[set[str]] = None,
 ) -> Generator[VerificationNodeData, Any, None]:
     verification_nodes = vnt.to_list(
-        cutoff=cutoff, excluded_event_ids=missing_event_ids
+        cutoff=time_of_selection, excluded_event_ids=missing_event_ids
     )
     rng = RandomGen(rng_seed)
 
@@ -64,8 +83,6 @@ def witness_selection_iter(
             if node.public_key == rng_seed.payee_public_key:
                 continue
             if node.public_key == rng_seed.payer_public_key:
-                continue
-            if node.public_key == NODE_0_PUBLIC_KEY:
                 continue
             yield node
         else:
@@ -83,7 +100,7 @@ def validate_skips(skip_list: Iterable[bool]):
 def validate_selected_witnesses(
     vnt: "VerificationNetTimeline",
     selected_nodes: AbstractSet[VerificationNodeData],
-    cutoff: float,
+    time_of_selection: float,
     seed: RNGSeed,
     missing_event_ids: Optional[set[str]] = None,
 ):
@@ -91,7 +108,7 @@ def validate_selected_witnesses(
     if the selected nodes were statistically implausible"""
 
     ws_iter = witness_selection_iter(
-        vnt, cutoff, seed, missing_event_ids
+        vnt, time_of_selection, seed, missing_event_ids
     )  # TODO handle iterator exhausted
     skip_iter = (node not in selected_nodes for node in ws_iter)
 
@@ -109,7 +126,7 @@ def validate_missing_events(
 async def select_witnesses(
     protocol: "AbstractProtocol",
     vnt: "VerificationNetTimeline",
-    cutoff: float,
+    cur_time: float,
     seed: RNGSeed,
 ) -> tuple[SelectedWitnesses, list[bool]]:
     """Selects and reaches out to nodes from the verification network in accordance with the random seed at time 'cutoff'.
@@ -127,7 +144,7 @@ async def select_witnesses(
     tasks: set[asyncio.Task] = set()
     selected_nodes: list[SelectedNode] = []
     skip_list = []
-    open_connections: set['NetConnection'] = set()
+    open_connections: set["NetConnection"] = set()
 
     async def check_connection(node_data: VerificationNodeData):
         nonlocal successes, unresolved
@@ -150,7 +167,7 @@ async def select_witnesses(
             unresolved -= 1
             skip_list.append(skipped)
 
-    ws_iter = witness_selection_iter(vnt, cutoff, seed)
+    ws_iter = witness_selection_iter(vnt, cur_time, seed)
 
     try:
         while successes < TRANSACTION_WITNESSES:

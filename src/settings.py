@@ -69,6 +69,9 @@ TIME_TO_CONSISTENCY = timedelta(days=2).total_seconds()
 """Time until vnt reaches eventual consistency. Newer events are ignored when comparing verification network timelines
 as they may not have had a chance to propagate through the network yet. This variable is for how far back events should be ignored."""
 
+ROLLOVER_PERIOD = timedelta(days=30).total_seconds()
+"""How often to roll over the receipts for a transaction to new verification nodes."""
+
 TRANSACTION_WITNESSES = 100
 """How many other nodes are chosen to redundantly store information about the transaction for validation"""
 

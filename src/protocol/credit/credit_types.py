@@ -2,13 +2,14 @@ from abc import ABC
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from functools import cache
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
-from crypto.signature import Signed
+from crypto.signature import ManagedSignable, Signed
 from crypto.util import to_sha256
-from protocol.dialogue.util.rng_seed import RNGSeed, WitnessSelectionRNGData
+from protocol.dialogue.util.rng_seed import RNGSeed
 from protocol.dialogue.util.witness_selection_util import (
+    time_of_witness_selection,
     validate_missing_events,
     validate_selected_witnesses,
 )
@@ -28,18 +29,29 @@ class ContractType(StrEnum):
 
 
 @dataclass(frozen=True)
-class Contract(ABC):
+class Contract(ManagedSignable):
     uuid: UUID
     contract_type: ContractType
 
 
 @dataclass(frozen=True)
-class FundWithdrawal:
+class FundWithdrawal(ManagedSignable):
     receipt_id: str
-    rng_seed: WitnessSelectionRNGData
+    timestamp: float
+    payee_public_key: str
+    payer_public_key: str
     witnesses: tuple[VerificationNodeData, ...]
     missing_event_ids: tuple[str, ...]
     amount: int
+
+    def signature_content(self) -> Any:
+        return (
+            self.receipt_id,
+            self.amount,
+            self.timestamp,
+            self.payee_public_key,
+            self.payer_public_key,
+        )
 
     def witnessed_by(self, public_key: str) -> bool:
         for witness in self.witnesses:
@@ -47,26 +59,34 @@ class FundWithdrawal:
                 return True
         return False
 
-    def validate_selected_witnesses(self, vnt: "VerificationNetTimeline"):
-        seed = RNGSeed.from_dataclass(self.rng_seed, vnt)
+    def validate_selected_witnesses(
+        self, vnt: "VerificationNetTimeline", time_of_selection: float
+    ):
+        checksum = vnt.get_latest_checksum(self.timestamp)
+        seed = RNGSeed(
+            checksum=checksum,
+            payee_public_key=self.payee_public_key,
+            payer_public_key=self.payer_public_key,
+        )
+
         validate_selected_witnesses(
             vnt=vnt,
             selected_nodes=set(self.witnesses),
-            cutoff=self.rng_seed.timestamp,
+            time_of_selection=time_of_selection,
             seed=seed,
             missing_event_ids=set(self.missing_event_ids),
         )
 
-    def validate_missing_events(self, protocol: "StdProtocol"):
-        events = (
-            protocol.verification_net_timeline.event_from_id(event_id)
-            for event_id in self.missing_event_ids
-        )
-        validate_missing_events(events, self.rng_seed.timestamp)
+    def validate_missing_events(
+        self, vnt: "VerificationNetTimeline", witnesses_selected_timestamp: float
+    ):
+        events = (vnt.event_from_id(event_id) for event_id in self.missing_event_ids)
+        validate_missing_events(events, witnesses_selected_timestamp)
 
 
 @dataclass(frozen=True)
 class Transaction(Contract):
+    uuid: UUID
     contract_type: Literal[ContractType.TRANSACTION]
     payer_address: int
     payer_public_key: str
@@ -77,7 +97,20 @@ class Transaction(Contract):
     witnesses: tuple[VerificationNodeData, ...]
     timestamp: float
 
-    def validate_selected_witnesses(self, protocol: "StdProtocol"):
+    def signature_content(self) -> Any:
+        return (
+            self.uuid,
+            self.contract_type,
+            self.payer_public_key,
+            self.payee_public_key,
+            self.amount,
+            [fund.signature_content() for fund in self.funds],
+            self.timestamp,
+        )
+
+    def validate_selected_witnesses(
+        self, protocol: "StdProtocol", time_of_selection: float
+    ):
         """Convenience wrapper for util.validate_selected_witnesses.
         Validates if the selected witnesses are correct for this contract and raises an exception if not
         """
@@ -92,11 +125,11 @@ class Transaction(Contract):
         validate_selected_witnesses(
             vnt=protocol.verification_net_timeline,
             selected_nodes=set(self.witnesses),
-            cutoff=self.timestamp,
+            time_of_selection=time_of_selection,
             seed=seed,
         )
 
-    def validate_funds(self, protocol: "StdProtocol"):
+    def validate_funds(self, protocol: "StdProtocol", cur_time: float):
         """Validates the funds for this transaction and raises and exception if not"""
 
         if self.payer_public_key == NODE_0_PUBLIC_KEY:
@@ -105,9 +138,10 @@ class Transaction(Contract):
         if self.amount != sum(fund.amount for fund in self.funds):
             raise ValueError("Invalid transaction, not enough funds to cover payment")
 
+        tows = time_of_witness_selection(self.timestamp, cur_time)
         for fund in self.funds:
-            fund.validate_missing_events(protocol)
-            fund.validate_selected_witnesses(protocol.verification_net_timeline)
+            fund.validate_missing_events(protocol.verification_net_timeline, tows)
+            fund.validate_selected_witnesses(protocol.verification_net_timeline, tows)
 
     def witnessed_by(self, public_key: str) -> bool:
         for witness in self.witnesses:
@@ -143,7 +177,17 @@ class Stake(Contract):
     funds: tuple[FundWithdrawal, ...]
     timestamp: float
 
-    def validate_funds(self, vnt: "VerificationNetTimeline"):
+    def signature_content(self) -> Any:
+        return (
+            self.uuid,
+            self.contract_type,
+            self.public_key,
+            self.amount,
+            [fund.signature_content() for fund in self.funds],
+            self.timestamp,
+        )
+
+    def validate_funds(self, vnt: "VerificationNetTimeline", cur_time: float):
         """Validates the funds for this transaction and raises and exception if not"""
 
         if self.public_key == NODE_0_PUBLIC_KEY:
@@ -156,11 +200,8 @@ class Stake(Contract):
             raise ValueError("Invalid stake, not enough funds to cover payment")
 
         for fund in self.funds:
-            events = (
-                vnt.event_from_id(event_id) for event_id in fund.missing_event_ids
-            )
-            validate_missing_events(events, fund.rng_seed.timestamp)
-            fund.validate_selected_witnesses(vnt)
+            fund.validate_missing_events(vnt, self.timestamp)
+            fund.validate_selected_witnesses(vnt, self.timestamp)
 
     def get_node(self):
         "Get's the node data for the node joining the verification network with this stake"

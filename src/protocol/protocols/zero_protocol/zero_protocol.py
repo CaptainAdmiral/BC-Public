@@ -1,10 +1,10 @@
 from typing import Callable, Hashable, cast
 
-from protocol.dialogue.zero_dialogues import DIALOGUES, RESPONSES
 import timeline
 from crypto.signature import SignatureFactory, Signed
 from crypto.util import PrivateKey, PublicKey
 from protocol.dialogue.const import DialogueEnum
+from protocol.dialogue.zero_dialogues import DIALOGUES, RESPONSES
 from protocol.protocols.abstract_protocol import AbstractProtocol
 from protocol.protocols.common_types import NodeData, VerificationNodeData
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
@@ -61,4 +61,6 @@ class ZeroProtocol(AbstractProtocol):
     def on_event_added(self, event: VerificationNetEvent): ...
 
     async def transfer_credit_to(self, amount: int, payee: NodeData):
-        await self.run_dialogue(payee.address, DialogueEnum.TRANSFER_CREDIT, amount, payee)
+        await self.run_dialogue(
+            payee.address, DialogueEnum.TRANSFER_CREDIT, amount, payee
+        )
