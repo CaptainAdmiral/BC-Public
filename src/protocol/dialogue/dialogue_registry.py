@@ -30,7 +30,7 @@ def dialogue_registrars(dialogue_registry: dict[str, DialogueType], response_reg
             @functools.wraps(f)
             async def wrapped(du: DialogueUtil, protocol: T, *args: P.args, **kwargs: P.kwargs):
                 if LOG_DIALOGUES:
-                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] New dialogue: {key}")
+                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] Initiating dialogue: {key}")
                 try:
                     du.init(key)
                     res = await f(du, protocol, *args, **kwargs)
@@ -56,7 +56,7 @@ def dialogue_registrars(dialogue_registry: dict[str, DialogueType], response_reg
             @functools.wraps(f)
             async def wrapped(du: DialogueUtil, protocol: T):
                 if LOG_DIALOGUES:
-                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] Expecting dialogue: {key}")
+                    logging.info(f"[{du.net_connection._node.address} | {du.net_connection._other_node.address}] Responding to: {key}")
                 try:
                     await du.expect(key)
                     res = await f(du, protocol)

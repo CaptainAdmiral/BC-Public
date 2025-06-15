@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Hashable, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Hashable, Literal, Protocol
 from uuid import UUID
+
+from pydantic import Discriminator, Tag
 
 from crypto.signature import Signed
 from crypto.util import to_sha256
@@ -10,7 +12,7 @@ from protocol.credit.credit_types import Stake
 from protocol.dialogue.dialogue_types import DialogueException
 from protocol.dialogue.util.witness_selection_util import validate_signature_count
 from protocol.protocols.common_types import VerificationNodeData
-from settings import TIME_TO_CONSISTENCY, VERIFIER_REDUNDANCY
+from settings import TIME_TO_CONSISTENCY
 from timeline import cur_time
 from util.timestamped import Timestamped
 
@@ -33,11 +35,24 @@ class VerificationNetEventEnum(StrEnum):
     """Occasionally broadcast to prevent manipulation of the verification timeline as a source of randomness"""
 
 
+def get_discriminator_value(v: Any) -> str:
+    if isinstance(v, dict):
+        return v["event_type"]
+    return getattr(v, "event_type")
+
+
+VNTEventDataTypes = (
+    Annotated["JoinData", Tag(VerificationNetEventEnum.NODE_JOIN)]
+    | Annotated["LeaveData", Tag(VerificationNetEventEnum.NODE_LEAVE)]
+    | Annotated["PauseData", Tag(VerificationNetEventEnum.NODE_PAUSE)]
+    | Annotated["ResumeData", Tag(VerificationNetEventEnum.NODE_RESUME)]
+    | Annotated["EntropyData", Tag(VerificationNetEventEnum.ADD_ENTROPY)]
+)
+
+
 @dataclass(frozen=True)
 class VNTEventPacket:
-    event_type: VerificationNetEventEnum
-    data: str
-    """Json serialized event data"""
+    data: Annotated[VNTEventDataTypes, Discriminator(get_discriminator_value)]
 
 
 class VNTUpdateHelper:
@@ -122,7 +137,13 @@ class VerificationNetEvent[T: HashableTimestamped](ABC, Timestamped):
 
 
 @dataclass(frozen=True)
-class JoinData:
+class VNTEventData(ABC):
+    event_type: VerificationNetEventEnum
+
+
+@dataclass(frozen=True)
+class JoinData(VNTEventData):
+    event_type: Literal[VerificationNetEventEnum.NODE_JOIN]
     signed_stake: Signed[Stake]
     timestamp: float
 
@@ -167,7 +188,7 @@ class JoinEvent(VerificationNetEvent[JoinData]):
                 "Stake expired"
             )  # Prevents old stakes from being reused to join vnt
 
-        stake.validate_funds(vnt)
+        stake.validate_funds(vnt, timestamp)
         for fund in stake.funds:
             validate_signature_count(fund.witnesses, self.signed_vnt_packet.signatures)
 
@@ -177,7 +198,8 @@ class JoinEvent(VerificationNetEvent[JoinData]):
 
 
 @dataclass(frozen=True)
-class LeaveData:
+class LeaveData(VNTEventData):
+    event_type: Literal[VerificationNetEventEnum.NODE_LEAVE]
     stake_id: UUID
     stake_witnesses: tuple[VerificationNodeData, ...]
     fund_ids: tuple[str, ...]
@@ -207,7 +229,8 @@ class LeaveEvent(VerificationNetEvent[LeaveData]):
 
 
 @dataclass(frozen=True)
-class PauseData:
+class PauseData(VNTEventData):
+    event_type: Literal[VerificationNetEventEnum.NODE_PAUSE]
     timestamp: float
     node: VerificationNodeData
 
@@ -234,7 +257,8 @@ class PauseEvent(VerificationNetEvent[PauseData]):
 
 
 @dataclass(frozen=True)
-class ResumeData:
+class ResumeData(VNTEventData):
+    event_type: Literal[VerificationNetEventEnum.NODE_RESUME]
     timestamp: float
     node: VerificationNodeData
 
@@ -261,7 +285,8 @@ class ResumeEvent(VerificationNetEvent[ResumeData]):
 
 
 @dataclass(frozen=True)
-class EntropyData:
+class EntropyData(VNTEventData):
+    event_type: Literal[VerificationNetEventEnum.ADD_ENTROPY]
     timestamp: float
     node: VerificationNodeData
     entropy: str

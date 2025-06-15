@@ -33,9 +33,10 @@ def _prob_n_runs_or_more(n, run_len):
 def check_consecutive_skips(skip_array: NDArray[np.bool_]):
     '''Finds the approximate probability of the sequence being legitimate based on the
     lengths of all the runs of consecutive skips'''
-    chains: dict[int, int] = {}
 
+    chains: dict[int, int] = {}
     chain_len = 0
+
     for skip in skip_array:
         if skip:
             chain_len += 1

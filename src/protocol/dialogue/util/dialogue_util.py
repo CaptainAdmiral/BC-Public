@@ -15,7 +15,7 @@ class DialogueUtil:
         OUT = auto()
         IN = auto()
 
-    def __init__(self, net_connection: 'NetConnection'):
+    def __init__(self, net_connection: "NetConnection"):
         self.net_connection = net_connection
         self._last_com_type: DialogueUtil.ComType | None = None
         self._errored = False

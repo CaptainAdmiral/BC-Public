@@ -1,17 +1,21 @@
 import asyncio
 import uuid
-from asyncio.log import logger
 from typing import TYPE_CHECKING, Optional
 
 from crypto.signature import Signed
-from protocol.credit.credit_types import ContractType, Receipt, Transaction
+from protocol.credit.credit_types import (
+    ContractType,
+    FundTypeEnum,
+    Receipt,
+    Transaction,
+)
 from protocol.dialogue.const import ControlPacket, DialogueEnum
 from protocol.dialogue.dialogue_registry import DialogueType, dialogue_registrars
 from protocol.dialogue.dialogue_types import DialogueException
 from protocol.dialogue.packets import LatestChecksumPacket, Nullable
 from protocol.dialogue.util.contact_util import filter_exceptions
 from protocol.dialogue.util.dialogue_util import DialogueUtil
-from protocol.dialogue.util.rng_seed import RNGSeed
+from protocol.dialogue.util.rng_seed import get_transaction_rng
 from protocol.dialogue.util.witness_selection_util import SelectedNode, select_witnesses
 from protocol.protocols.common_types import NodeData
 from protocol.verification_net.vnt_event_factory import VNTEventFactory
@@ -260,13 +264,12 @@ async def transfer_credit(
     """Send currency to another wallet"""
 
     timestamp = cur_time()
-    checksum = protocol.verification_net_timeline.get_latest_checksum()
-    seed = RNGSeed(
-        checksum=checksum,
-        payee_public_key=payee.public_key,
-        payer_public_key=protocol.public_key,
+    seed = get_transaction_rng(
+        protocol.verification_net_timeline,
+        timestamp,
+        payee.public_key,
+        protocol.public_key,
     )
-
     await du.expect_acknowledgement()
 
     # Helper function to sync missing events
@@ -296,7 +299,7 @@ async def transfer_credit(
         # Gather missing events
         results = await asyncio.gather(
             *(get_missing_events(witness) for witness in witnesses),
-            return_exceptions=True
+            return_exceptions=True,
         )
         witness_obj.close_all_connections()
         filtered_results = filter(filter_exceptions, results)
@@ -325,7 +328,6 @@ async def transfer_credit(
         payee_public_key=payee.public_key,
         amount=amount,
         funds=(),
-        witnesses=witness_nodes,
         timestamp=timestamp,
     )
 
@@ -340,7 +342,13 @@ async def transfer_credit(
     if not signed_contract.same_as(countersigned_contract):
         raise DialogueException("Unrecognized contract")
 
-    receipt = Receipt(**vars(countersigned_contract))
+    receipt = Receipt(
+        **vars(countersigned_contract),
+        fund_type=FundTypeEnum.RECEIPT,
+        witnesses=witness_nodes,
+        timestamp=timestamp,
+        rng_seed=seed,
+    )
     du.reply(receipt)  # Payment officially sent
     await du.expect_acknowledgement()
 

@@ -1,6 +1,6 @@
 import bisect
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator, Optional, cast
+from typing import Callable, Iterable, Iterator, Optional
 
 from crypto.signature import Signed
 from protocol.protocols.common_types import VerificationNodeData
@@ -19,15 +19,17 @@ class EventWithTimeAdded:
     event: _Event[VerificationNetEvent]
     time_added: float
 
+
 class TimeView:
     def __init__(self, seq: list[EventWithTimeAdded]):
         self.seq = seq
-        
+
     def __getitem__(self, idx: int):
         return self.seq[idx].time_added
 
     def __len__(self):
         return len(self.seq)
+
 
 # TODO: Checkpoint at regular intervals for fast to_list
 class VerificationNetTimeline:
@@ -89,7 +91,11 @@ class VerificationNetTimeline:
         node = self._timeline.add(event)
         self._checksum_dict[event.checksum] = node
         self._event_dict[event_id] = node
-        bisect.insort(self._events_as_added, EventWithTimeAdded(event=node, time_added=cur_time()), key=lambda e: e.time_added)
+        bisect.insort(
+            self._events_as_added,
+            EventWithTimeAdded(event=node, time_added=cur_time()),
+            key=lambda e: e.time_added,
+        )
         return node
 
     def add(self, event: VerificationNetEvent):
@@ -158,14 +164,14 @@ class VerificationNetTimeline:
             start_idx = bisect.bisect_left(TimeView(self._events_as_added), start)
 
         events = []
-        idx = start_idx 
+        idx = start_idx
         while idx < len(self._events_as_added):
             event = self._events_as_added[idx]
             if stop and event.time_added > stop:
                 break
             events.append(self._events_as_added[idx])
-            
-        return events 
+
+        return events
 
     def subscribe(self, event_handler: Callable[[VerificationNetEvent], None]):
         """Will trigger the callback every time a new event is added"""

@@ -1,4 +1,4 @@
-from typing import Callable, Hashable, cast
+from typing import Callable, Hashable
 
 import timeline
 from crypto.signature import SignatureFactory, Signed

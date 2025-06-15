@@ -43,7 +43,7 @@ class StdProtocol(AbstractProtocol):
             private_key=self._private_key_obj,
             address=self.address,
         )
-        self.receipt_book = ReceiptBook()
+        self.receipt_book = ReceiptBook(self.public_key)
         """Receipts held for other accounts"""
         self.stake: "Stake | None" = None
 

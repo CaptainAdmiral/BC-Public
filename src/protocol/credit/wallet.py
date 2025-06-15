@@ -1,4 +1,5 @@
-from protocol.credit.credit_types import FundWithdrawal, Receipt
+import bisect
+from protocol.credit.credit_types import FundTypes, FundWithdrawal, Receipt
 from protocol.credit.tracked_fund import TrackedFund
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
 from settings import TIME_TO_CONSISTENCY
@@ -32,18 +33,17 @@ class Wallet:
         funds: list[FundWithdrawal] = []
         for fund in self:
             withdrawal_amount = min(fund.available, amount - total)
-            timestamp = fund.receipt.contract.timestamp
+            timestamp = fund.details.timestamp
             missing_events = event_timeline.events_by_time_added(
                 timestamp - TIME_TO_CONSISTENCY, timestamp
             )
             missing_ids = tuple(event.event.data.id for event in missing_events)
 
             withdrawal = FundWithdrawal(
-                receipt_id=fund.receipt.id,
-                timestamp=fund.receipt.contract.timestamp,
-                payee_public_key=fund.receipt.contract.payee_public_key,
-                payer_public_key=fund.receipt.contract.payer_public_key,
-                witnesses=fund.receipt.contract.witnesses,
+                fund_id=fund.id,
+                timestamp=fund.details.timestamp,
+                rng_seed=fund.details.rng_seed,
+                witnesses=fund.details.witnesses,
                 missing_event_ids=missing_ids,
                 amount=withdrawal_amount,
             )
@@ -54,32 +54,36 @@ class Wallet:
                 break
         return funds
 
-    def update_credit(self, receipt: Receipt):
-        """Updates the internally tracked credit based on the receipt"""
-        contract = receipt.contract
+    def add_credit(self, fund: FundTypes):
+        """Updates the internally tracked credit based on the fund"""
+        
+        tracked_fund = TrackedFund(id=fund.id, details=fund)
+        bisect.insort_right(self._funds, tracked_fund, key=lambda tf: tf.remaining)
+        self._fund_dict[tracked_fund.id] = tracked_fund
+        
+    def deduct_credit(self, receipt: Receipt):
+        """Deducts the receipt from the internally tracked credit"""
 
-        if contract.payee_address == self.address:
-            fund = TrackedFund(receipt=receipt)
-            self._funds.append(fund)
-            self._fund_dict[receipt.id] = fund
-        elif contract.payer_address == self.address:
-            for withdrawal in contract.funds:
-                if withdrawal.receipt_id not in self._fund_dict:
-                    continue
-                fund = self._fund_dict[withdrawal.receipt_id]
-                fund.withdraw_credit(withdrawal, receipt)
-                if fund.remaining == 0:
-                    self._funds.remove(fund)
-                    del self._fund_dict[withdrawal.receipt_id]
-        else:
-            raise Exception(
-                "Please use ReceiptBook for tracking transactions that don't involve this wallet"
-            )
+        contract = receipt.contract
+        
+        assert contract.payer_address == self.address
+
+        for withdrawal in contract.funds:
+            if withdrawal.fund_id not in self._fund_dict:
+                continue
+            fund = self._fund_dict[withdrawal.fund_id]
+            fund.withdraw_credit(withdrawal, receipt)
+            if fund.remaining == 0:
+                self._funds.remove(fund)
+                del self._fund_dict[withdrawal.fund_id]
 
         self._funds.sort(key=lambda tf: tf.remaining)
 
-    def get_fund(self, receipt_id: str) -> TrackedFund:
-        return self._fund_dict[receipt_id]
+    def get_fund(self, fund_id: str) -> TrackedFund:
+        return self._fund_dict[fund_id]
+
+    def __getitem__(self, key: str) -> TrackedFund:
+        return self.get_fund(key)
 
     def __iter__(self):
         return iter(self._funds)

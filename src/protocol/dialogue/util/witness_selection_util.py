@@ -19,9 +19,6 @@ from protocol.dialogue.util.stat import (
 )
 from protocol.protocols.common_types import VerificationNodeData
 from settings import (
-    NODE_0_PUBLIC_KEY,
-    ROLLOVER_PERIOD,
-    TIME_TO_CONSISTENCY,
     TRANSACTION_WITNESSES,
     VERIFIER_REDUNDANCY,
 )
@@ -53,19 +50,6 @@ class SelectedWitnesses:
             witness.net_con.close()
 
 
-def time_of_witness_selection(original_cutoff: float, cur_time: float):
-    """The witnesses holding transaction receipts rotate periodically.
-    This function will return the timestamp of when the witnesses currently holding
-    the receipt were selected"""
-
-    if original_cutoff > cur_time - TIME_TO_CONSISTENCY:
-        return original_cutoff
-    else:
-        return original_cutoff + ROLLOVER_PERIOD * (
-            ((cur_time - TIME_TO_CONSISTENCY) - original_cutoff) // ROLLOVER_PERIOD
-        )
-
-
 def witness_selection_iter(
     vnt: "VerificationNetTimeline",
     time_of_selection: float,
@@ -79,12 +63,7 @@ def witness_selection_iter(
 
     while True:
         if verification_nodes:
-            node = verification_nodes.pop(rng.next(len(verification_nodes)))
-            if node.public_key == rng_seed.payee_public_key:
-                continue
-            if node.public_key == rng_seed.payer_public_key:
-                continue
-            yield node
+            yield verification_nodes.pop(rng.next(len(verification_nodes)))
         else:
             break
 
@@ -92,7 +71,7 @@ def witness_selection_iter(
 def validate_skips(skip_list: Iterable[bool]):
     """Checks if a sequence of skipped nodes during witness selection is statistically valid"""
 
-    skip_array = np.array(skip_list)
+    skip_array = np.array(list(skip_list))
     check_total_skipped(skip_array)
     check_consecutive_skips(skip_array)
 

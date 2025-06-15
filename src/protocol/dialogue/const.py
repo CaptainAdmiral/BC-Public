@@ -15,6 +15,8 @@ class DialogueEnum(StrEnum):
     REQUEST_HOLD_RECEIPT = auto()
     INFORM_VNT_EVENT = auto()
     CONFIRM_STAKE = auto()
+    REQUEST_ROLLOVER_SIGNATURE = auto()
+    SEND_ROLLOVER_FUND = auto()
 
 class ControlPacket(StrEnum):
     CLOSE = auto()

@@ -31,6 +31,9 @@ SIG_PADDING = padding.PSS(
 TIME_SCALE = 1
 """How many simulated seconds pass for every real world second"""
 
+UPDATE_RATE = 0.1
+"""How many seconds to wait between updates"""
+
 NETWORK_DELAY = 0.2
 """The average delay in seconds it takes for a net connection to successfully propagate a packet to the target node"""
 
@@ -65,6 +68,9 @@ MIN_P_MISSING_EVENT = 0.01
 """The floor for probability of having no knowledge of an event as time passes. No matter how much time has passed the probability of missing
 an event will never be lower than this value."""
 
+TIMESTAMP_LENIENCY = timedelta(hours=1).total_seconds()
+"""The maximum acceptable difference between the reported timestamp and the current time"""
+
 TIME_TO_CONSISTENCY = timedelta(days=2).total_seconds()
 """Time until vnt reaches eventual consistency. Newer events are ignored when comparing verification network timelines
 as they may not have had a chance to propagate through the network yet. This variable is for how far back events should be ignored."""
@@ -78,9 +84,12 @@ TRANSACTION_WITNESSES = 100
 VERIFIER_REDUNDANCY = int(TRANSACTION_WITNESSES / 1.9) + 10
 """Minimum number of witness responses confirming a transaction occurred."""
 
-STAKE_AMOUNT = 1_000_000
+STAKE_AMOUNT = 1_000_000_00
 """How much each node needs to put up for their proof of stake,
 losable if they fail to properly validate transactions due to running a non standard protocol"""
+
+GAS_AMOUNT = 1000
+"""How much verifiers take in total per transaction"""
 
 NODE_0_PUBLIC_KEY, NODE_0_PRIVATE_KEY = (
     """-----BEGIN PUBLIC KEY-----

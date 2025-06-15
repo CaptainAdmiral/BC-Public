@@ -8,6 +8,7 @@ from network_emulator import network
 from network_emulator.network_exceptions import NetworkException
 from protocol.dialogue.const import ControlPacket
 from settings import get_verbose
+import timeline
 
 if TYPE_CHECKING:
     from network_emulator.node import Node
@@ -180,11 +181,10 @@ class NetConnection:
         self._write_to_inverse(out)
 
     def _write_to_inverse(self, out: str):
-        add_async_task(self._write_to(self.get_inverse(), out))
+        self._write_to(self.get_inverse(), out)
 
-    async def _write_to(self, net_connection: "NetConnection", out: str):
-        await network.delay()
-        net_connection.receive_packet(str(out))
+    def _write_to(self, net_connection: "NetConnection", out: str):
+        timeline.schedule_event(timeline.cur_time() + network.get_delay(), lambda: net_connection.receive_packet(str(out)))
 
     def receive_packet(self, pkt: str):
         if get_verbose():

@@ -16,9 +16,11 @@ from protocol.verification_net.vnt_types import (
     JoinData,
     JoinEvent,
     VerificationNetEventEnum,
+    VNTEventPacket,
 )
 from run import run
-from settings import TRANSACTION_WITNESSES, set_verbose
+from settings import TIME_SCALE, TIME_TO_CONSISTENCY, TIMESTAMP_LENIENCY, TRANSACTION_WITNESSES, UPDATE_RATE, set_verbose
+import timeline
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -40,8 +42,13 @@ console_handler.setLevel(logging.INFO)
 file_handler = logging.FileHandler("logs.log", mode="w")
 file_handler.setLevel(logging.DEBUG)
 
-console_formatter = logging.Formatter("%(levelname)s : %(message)s")
-file_formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
+class Formatter(logging.Formatter):
+    def format(self, record):
+        record.timestamp = f"[{timeline.cur_time():.2f}]"
+        return super().format(record)
+
+console_formatter = Formatter("%(timestamp)s : %(levelname)s : %(message)s")
+file_formatter = Formatter("%(asctime)s : %(timestamp)s : %(levelname)s : %(message)s")
 console_handler.setFormatter(console_formatter)
 file_handler.setFormatter(file_formatter)
 root_logger = logging.getLogger()
@@ -75,14 +82,14 @@ async def initialize_network():
             public_key=protocol.public_key,
             amount=0,
             funds=(),
-            timestamp=0,
+            timestamp=0.0,
         )
 
         signed_stake = node_0.sign(stake)
-        join_data = JoinData(signed_stake, stake.timestamp)
-        event_packet = VNTEventFactory.packet_from_data(
-            VerificationNetEventEnum.NODE_JOIN, join_data
+        join_data = JoinData(
+            VerificationNetEventEnum.NODE_JOIN, signed_stake, stake.timestamp
         )
+        event_packet = VNTEventPacket(join_data)
         event_packet = node_0.sign(event_packet)
         join_event = VNTEventFactory.event_from_packet(event_packet)
         node_0.verification_net_timeline.add(join_event)
@@ -98,14 +105,24 @@ async def initialize_network():
     credit_origin_node = Node(protocol_selection=ProtocolSelectionBehaviour.USE_STD)
     credit_origin = cast(StdProtocol, credit_origin_node.protocol)
 
+    await timeline.set_time(TIME_TO_CONSISTENCY + TIMESTAMP_LENIENCY)
     await node_0.transfer_credit_to(10**20, credit_origin.node_data)
 
+async def progress_time():
+    try:
+        while True:
+            await timeline.pass_time(UPDATE_RATE * TIME_SCALE)
+            await asyncio.sleep(UPDATE_RATE)
+    except asyncio.CancelledError:
+        return
 
 async def async_main():
+    time_manager = asyncio.create_task(progress_time())
     await initialize_network()
     await wait_all_tasks()
     await run()
     await wait_all_tasks()
+    time_manager.cancel()
 
 
 async def soft_exit_async_main():

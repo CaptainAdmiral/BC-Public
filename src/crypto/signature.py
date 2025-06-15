@@ -2,7 +2,7 @@ import base64
 from abc import ABC
 from dataclasses import dataclass
 from functools import cache
-from typing import Any, Hashable
+from typing import Any, Hashable, Iterable
 
 from cryptography.exceptions import InvalidSignature
 
@@ -113,3 +113,6 @@ def sign[T: Hashable](
         public_key=public_key, private_key=private_key, address=address
     )
     return sf.sign(message)
+
+def with_signatures(message: Any, signatures: Iterable[Signature]):
+    return Signed(message=message, signatures=frozenset(signatures))

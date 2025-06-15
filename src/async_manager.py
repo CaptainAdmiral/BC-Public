@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import traceback
-from typing import Coroutine
+from typing import Any, Callable, Coroutine
 
 tasks: set[asyncio.Task] = set()
 
@@ -28,3 +28,8 @@ async def wait_all_tasks():
     if not tasks:
         return
     await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+
+def as_async[**P](f: Callable[P, Any]):
+    async def wrapper(*args: P.args, **kwargs: P.kwargs):
+        return f(*args, **kwargs)
+    return wrapper
