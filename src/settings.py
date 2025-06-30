@@ -46,13 +46,6 @@ e.g a value of 0.1 will result in a standard deviation that's 1/10th of the mean
 BASE_TIMEOUT = 15
 """Maximum number of seconds to wait for a response before timing out"""
 
-MIN_CONNECTIONS = 100
-"""The minimum number of nodes a node is allowed to know about to be considered a part of the network.
-This is enforced to provide fault tolerance for distributed broadcast protocols."""
-
-ACTIVE_RATIO = 0.5
-"""What fraction of the network is probably active right now"""
-
 VERIFICATION_ACTIVE_RATIO = 0.9
 """What fraction of the verification network is probably active on right now"""
 
@@ -84,12 +77,15 @@ TRANSACTION_WITNESSES = 100
 VERIFIER_REDUNDANCY = int(TRANSACTION_WITNESSES / 1.9) + 10
 """Minimum number of witness responses confirming a transaction occurred."""
 
-STAKE_AMOUNT = 1_000_000_00
+STAKE_AMOUNT = 100_000_000
 """How much each node needs to put up for their proof of stake,
 losable if they fail to properly validate transactions due to running a non standard protocol"""
 
 GAS_AMOUNT = 1000
 """How much verifiers take in total per transaction"""
+
+ENTROPY_RATE = 1e-9
+"""The average number of times per second each node will emit an add entropy event"""
 
 NODE_0_PUBLIC_KEY, NODE_0_PRIVATE_KEY = (
     """-----BEGIN PUBLIC KEY-----

@@ -1,4 +1,5 @@
 import bisect
+
 from protocol.credit.credit_types import FundTypes, FundWithdrawal, Receipt
 from protocol.credit.tracked_fund import TrackedFund
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
@@ -16,6 +17,9 @@ class Wallet:
     @property
     def balance(self):
         return sum(fund.available for fund in self._funds)
+
+    def total_credit(self):
+        return sum(fund.total_credit() for fund in self._funds)
 
     def find_funds(
         self, amount: int, event_timeline: VerificationNetTimeline
@@ -41,7 +45,7 @@ class Wallet:
 
             withdrawal = FundWithdrawal(
                 fund_id=fund.id,
-                timestamp=fund.details.timestamp,
+                fund_timestamp=fund.details.timestamp,
                 rng_seed=fund.details.rng_seed,
                 witnesses=fund.details.witnesses,
                 missing_event_ids=missing_ids,
@@ -56,16 +60,16 @@ class Wallet:
 
     def add_credit(self, fund: FundTypes):
         """Updates the internally tracked credit based on the fund"""
-        
+
         tracked_fund = TrackedFund(id=fund.id, details=fund)
         bisect.insort_right(self._funds, tracked_fund, key=lambda tf: tf.remaining)
         self._fund_dict[tracked_fund.id] = tracked_fund
-        
+
     def deduct_credit(self, receipt: Receipt):
         """Deducts the receipt from the internally tracked credit"""
 
         contract = receipt.contract
-        
+
         assert contract.payer_address == self.address
 
         for withdrawal in contract.funds:

@@ -203,7 +203,9 @@ class Chronology[T]:
                 cutoff
 
         Returns:
-            _ChronologyNode: The latest node occurring before the cutoff (inclusive)'''
+            _ChronologyNode: The latest node occurring before the cutoff (inclusive)
+            
+        If there are multiple nodes with a timestamp of time, this function will return the leftmost node with that timestamp'''
         
         nearest_node = self._get_nearest_O1(time)
 
@@ -227,7 +229,10 @@ class Chronology[T]:
                 cutoff
 
         Returns:
-            _ChronologyNode: The earliest node occurring after the cutoff (inclusive)'''
+            _ChronologyNode: The earliest node occurring after the cutoff (inclusive)
+
+        If there are multiple nodes with a timestamp of time, this function will return the rightmost node with that timestamp'''
+        
         
         nearest_node = self._get_nearest_O1(time)
 
@@ -296,7 +301,6 @@ class Chronology[T]:
                 
                 self._earliest._prev = wrapped_event
                 wrapped_event._next = self._earliest
-                self._earliest = wrapped_event
 
             elif wrapped_event.timestamp > self._latest.timestamp:
 
@@ -328,7 +332,6 @@ class Chronology[T]:
 
                 self._latest._next = wrapped_event
                 wrapped_event._prev = self._latest
-                self._latest = wrapped_event
                         
             else:
                 node = self._latest_before(wrapped_event.timestamp)
@@ -346,6 +349,12 @@ class Chronology[T]:
                 wrapped_event._next = node._next
                 node._next = wrapped_event
                 wrapped_event._prev = node
+        
+        while self._earliest.prev is not None:
+            self._earliest = self._earliest.prev
+
+        while self._latest.next is not None:
+            self._latest = self._latest.next
 
         self._len += 1
         return wrapped_event

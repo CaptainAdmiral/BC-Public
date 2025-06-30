@@ -1,4 +1,4 @@
-from typing import Callable, Hashable
+from typing import TYPE_CHECKING, Callable, Hashable
 
 import timeline
 from crypto.signature import SignatureFactory, Signed
@@ -11,10 +11,13 @@ from protocol.verification_net.verification_net_timeline import VerificationNetT
 from protocol.verification_net.vnt_types import VerificationNetEvent
 from settings import NODE_0_PRIVATE_KEY, NODE_0_PUBLIC_KEY
 
+if TYPE_CHECKING:
+    from network_emulator.node import Node
+
 
 class ZeroProtocol(AbstractProtocol):
 
-    def __init__(self, node):
+    def __init__(self, node: "Node"):
         super().__init__(node)
         self.verification_net_timeline: VerificationNetTimeline = (
             VerificationNetTimeline()
@@ -32,10 +35,6 @@ class ZeroProtocol(AbstractProtocol):
         self.verification_net_timeline.subscribe(
             lambda event: self.on_event_added(event)
         )
-
-    @staticmethod
-    def weight() -> float:
-        return 0
 
     @property
     def node_data(self):
@@ -64,3 +63,6 @@ class ZeroProtocol(AbstractProtocol):
         await self.run_dialogue(
             payee.address, DialogueEnum.TRANSFER_CREDIT, amount, payee
         )
+
+    def stat_public_key(self) -> str:
+        return self.public_key

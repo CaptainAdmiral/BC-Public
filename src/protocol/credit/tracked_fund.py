@@ -9,6 +9,7 @@ from settings import GAS_AMOUNT
 if TYPE_CHECKING:
     from protocol.credit.credit_types import FundWithdrawal, Receipt, Stake
 
+
 class TrackedFund:
 
     def __init__(self, id: str, details: FundTypes):
@@ -16,7 +17,7 @@ class TrackedFund:
         self.details = details
         self.withdrawals: list["Receipt"] = []
         self.reservations: list["Stake"] = []
-    
+
     @classmethod
     def from_packet(cls, packet: TrackedFundPacket):
         tracked_fund = TrackedFund(packet.id, packet.details)
@@ -24,7 +25,9 @@ class TrackedFund:
         tracked_fund.reservations.extend(packet.reservations)
 
     def to_packet(self):
-        return TrackedFundPacket(self.id, self.details, tuple(self.withdrawals), tuple(self.reservations))
+        return TrackedFundPacket(
+            self.id, self.details, tuple(self.withdrawals), tuple(self.reservations)
+        )
 
     @property
     def available(self):
@@ -33,10 +36,13 @@ class TrackedFund:
                 receipt.contract.amount for receipt in self.withdrawals
             )
         else:
-            return self.details.amount - sum(
-                receipt.contract.amount + GAS_AMOUNT for receipt in self.withdrawals
-            ) - GAS_AMOUNT
-
+            return (
+                self.details.amount
+                - sum(
+                    receipt.contract.amount + GAS_AMOUNT for receipt in self.withdrawals
+                )
+                - GAS_AMOUNT
+            )
 
     @property
     def reserved(self):
@@ -45,6 +51,11 @@ class TrackedFund:
     @property
     def remaining(self):
         return self.available + self.reserved
+
+    def total_credit(self):
+        return self.details.amount - sum(
+            receipt.contract.amount for receipt in self.withdrawals
+        )
 
     def withdraw_credit(self, withdrawal: "FundWithdrawal", receipt: "Receipt"):
         assert withdrawal.amount <= self.available
@@ -63,9 +74,7 @@ class TrackedFund:
         self, new_witnesses: tuple[VerificationNodeData, ...], new_timestamp: float
     ):
         """Updates the receipt for this fund with the correct information after a rollover"""
-        self.details = self.details.update_witnesses(
-            new_witnesses, new_timestamp
-        )
+        self.details = self.details.update_witnesses(new_witnesses, new_timestamp)
 
     def is_expired(self):
         return self.details.is_expired()

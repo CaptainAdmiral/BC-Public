@@ -190,7 +190,7 @@ class JoinEvent(VerificationNetEvent[JoinData]):
 
         stake.validate_funds(vnt, timestamp)
         for fund in stake.funds:
-            validate_signature_count(fund.witnesses, self.signed_vnt_packet.signatures)
+            validate_signature_count(fund.witnesses, signed_stake.signatures)
 
             for witness in fund.witnesses:
                 if not signed_stake.signed_by(witness.public_key):

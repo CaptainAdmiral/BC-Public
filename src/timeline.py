@@ -13,7 +13,7 @@ class TimelineEvent:
 
 
 class TimeListener(Protocol):
-    def on_time_change(self, time: float) -> Iterable[TimelineEvent]:
+    def on_time_change(self, old_time: float, new_time: float) -> Iterable[TimelineEvent]:
         """Immediately schedules the returned timestamped callables before the time change takes place"""
         ...
 
@@ -82,11 +82,11 @@ async def time_update(time: float):
     _time = _target_time
     _target_time = time
 
-    if time < _time:
-        raise ValueError("time cannot be less than the current time!")
+    if time <= _time:
+        return
 
     for ts in subscribers:
-        events = ts.on_time_change(_time)
+        events = ts.on_time_change(_time, _target_time)
         for event in events:
             schedule_event(event.time, event.callback)
 
@@ -95,8 +95,9 @@ async def time_update(time: float):
 
 async def pass_time(delta: float):
     """Simulates delta time elapsing and triggers all scheduled events for that time period in order"""
-    global _time
+    global _time, _target_time
     await time_update(_time + delta)
+    _time = _target_time
 
 
 async def sleep(time: float):

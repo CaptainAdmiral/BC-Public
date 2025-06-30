@@ -1,6 +1,6 @@
 import bisect
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional, cast
 
 from crypto.signature import Signed
 from protocol.protocols.common_types import VerificationNodeData
@@ -47,7 +47,7 @@ class VerificationNetTimeline:
         # fmt: off
         self._timeline: Chronology[VerificationNetEvent] = Chronology(iterable, epoch_length=epoch_length, secondary_sort=secondary_sort)
         self._checksum_dict: dict[str, _Event[VerificationNetEvent]] = {} # dict[event_checksum, event]
-        self._event_dict: dict[str, _Event[VerificationNetEvent]] = {} # dict[event_hash, event]
+        self._event_dict: dict[str, _Event[VerificationNetEvent]] = {} # dict[event_id, event]
         self._events_as_added: list[EventWithTimeAdded] = [] 
         self._listeners: set[Callable[[VerificationNetEvent], None]] = set() # Callable[event_type, event_data]
         # fmt: on
@@ -72,8 +72,21 @@ class VerificationNetTimeline:
     def __contains__(self, event: VerificationNetEvent):
         return event.id in self._event_dict
 
-    def _update_checksums_from(self, node: _Event[VerificationNetEvent]):
+    def _update_checksums_from(self, timestamp: float):
         """Update each of the subsequent event's hashes using its own data and the previous event's hash"""
+
+        node = self._timeline._latest_before(timestamp)
+
+        if node is None:
+            return
+
+        while node and not isinstance(node, _Event):
+            node = node.next
+
+        if node is None:
+            return
+
+        node = cast(_Event[VerificationNetEvent], node)
 
         last_hash = node.data.prev_hash
         for event in self._timeline.wrapped_iter_from(node):
@@ -100,19 +113,19 @@ class VerificationNetTimeline:
 
     def add(self, event: VerificationNetEvent):
         node = self._add_without_update(event)
-        self._update_checksums_from(node)
+        self._update_checksums_from(node.timestamp)
         return node
 
     def add_from_packets(self, packets: Iterable[Signed[VNTEventPacket]]):
-        earliest_node: _Event[VerificationNetEvent] | None = None
+        earliest_timestamp: float | None = None
         for packet in packets:
             event = VNTEventFactory.event_from_packet(packet)
             node = self._add_without_update(event)
-            if earliest_node is None or node.timestamp < earliest_node.timestamp:
-                earliest_node = node
+            if earliest_timestamp is None or node.timestamp < earliest_timestamp:
+                earliest_timestamp = node.timestamp
 
-        if earliest_node is not None:
-            self._update_checksums_from(earliest_node)
+        if earliest_timestamp is not None:
+            self._update_checksums_from(earliest_timestamp)
 
     def from_checksum(self, checksum: str):
         if checksum in self._checksum_dict:

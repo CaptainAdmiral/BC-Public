@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Discriminator
 
-from crypto.signature import Signed
-from protocol.credit.credit_types import FundTypes, get_fund_type
+from crypto.signature import Signature, Signed
+from protocol.credit.credit_types import ClaimedStake, FundTypes, get_fund_type
 
 if TYPE_CHECKING:
     from protocol.credit.credit_types import Receipt, Stake
@@ -28,6 +28,7 @@ class TrackedFundPacket:
     details: Annotated[FundTypes, Discriminator(get_fund_type)]
     withdrawals: tuple["Receipt", ...]
     reservations: tuple["Stake", ...]
+
 
 @dataclass(frozen=True)
 class RolloverPacket:

@@ -39,7 +39,7 @@ def dialogue_registrars(dialogue_registry: dict[str, DialogueType], response_reg
                     return res
                 except DialogueException as e:
                     e.add_note(f"Raised in init: {key} [{du.net_connection._node.address} | {du.net_connection._other_node.address}]")
-                    du.error() # TODO move to top level dialogue
+                    du.error()
                     raise e
             
             dialogue_registry[key] = wrapped # type: ignore
@@ -65,7 +65,7 @@ def dialogue_registrars(dialogue_registry: dict[str, DialogueType], response_reg
                     return res
                 except DialogueException as e:
                     e.add_note(f"Raised in response: {key} [{du.net_connection._node.address} | {du.net_connection._other_node.address}]")
-                    du.error() # TODO move to top level dialogue
+                    du.error()
                     raise e
                             
             response_registry[key] = wrapped # type: ignore

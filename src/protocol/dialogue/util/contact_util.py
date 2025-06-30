@@ -99,8 +99,9 @@ async def contact_all_verification_nodes[T: 'AbstractProtocol', **P](protocol: T
 
     async def contact(node: VerificationNodeData):
         vnc = await network.connect(protocol.address, node.address)
-        vdu = DialogueUtil(vnc)
-        await dialogue(vdu, protocol, *args, **kwargs)
+        with vnc:
+            vdu = DialogueUtil(vnc)
+            await dialogue(vdu, protocol, *args, **kwargs)
 
     dialogue_tasks: set[asyncio.Task] = set(asyncio.create_task(contact(node)) for node in verifiers)
 

@@ -45,7 +45,6 @@ class DialogueUtil:
         self.reply(dialogue)
 
     async def expect[D](self, expect: D | type[D]) -> D:
-        # TODO process in all raw data types including from list
         if self._last_com_type == self.ComType.IN:
             raise DialogueException(
                 "Receiving two dialogue packets in a row not allowed"

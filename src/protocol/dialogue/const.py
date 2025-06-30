@@ -17,6 +17,8 @@ class DialogueEnum(StrEnum):
     CONFIRM_STAKE = auto()
     REQUEST_ROLLOVER_SIGNATURE = auto()
     SEND_ROLLOVER_FUND = auto()
+    TIMESTAMP_STAKE_CLAIMED = auto()
+    REQUEST_HOLD_STAKE_CLAIM = auto()
 
 class ControlPacket(StrEnum):
     CLOSE = auto()

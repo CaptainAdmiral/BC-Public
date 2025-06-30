@@ -264,12 +264,6 @@ async def transfer_credit(
     """Send currency to another wallet"""
 
     timestamp = cur_time()
-    seed = get_transaction_rng(
-        protocol.verification_net_timeline,
-        timestamp,
-        payee.public_key,
-        protocol.public_key,
-    )
     await du.expect_acknowledgement()
 
     # Helper function to sync missing events
@@ -290,6 +284,13 @@ async def transfer_credit(
         return missing
 
     while True:
+        seed = get_transaction_rng(
+            protocol.verification_net_timeline,
+            timestamp,
+            payee.public_key,
+            protocol.public_key,
+        )
+
         # Reach out to witnesses
         witness_obj, _ = await select_witnesses(
             protocol, protocol.verification_net_timeline, timestamp, seed

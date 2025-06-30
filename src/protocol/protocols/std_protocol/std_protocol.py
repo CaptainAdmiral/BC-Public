@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Callable, Hashable, cast
+import random
+from typing import TYPE_CHECKING, Callable, Hashable, Optional, cast
 
 import network_emulator.network as net
 import timeline
@@ -8,7 +9,15 @@ from protocol import AbstractProtocol
 from protocol.credit.receipt_book import ReceiptBook
 from protocol.credit.wallet import Wallet
 from protocol.dialogue.const import DialogueEnum
-from protocol.dialogue.dialogues import DIALOGUES, RESPONSES
+from protocol.dialogue.dialogues import (
+    DIALOGUES,
+    RESPONSES,
+    add_entropy,
+    join_verification_net,
+    leave_verification_net,
+    pause_verification,
+    resume_verification,
+)
 from protocol.dialogue.util.dialogue_util import DialogueUtil
 from protocol.protocols.common_types import NodeData, VerificationNodeData
 from protocol.verification_net.verification_net_timeline import VerificationNetTimeline
@@ -17,15 +26,16 @@ from protocol.verification_net.vnt_types import (
     VerificationNetEvent,
     VerificationNetEventEnum,
 )
-from settings import TIME_TO_CONSISTENCY
+from settings import ENTROPY_RATE, TIME_TO_CONSISTENCY
 
 if TYPE_CHECKING:
+    from network_emulator.node import Node
     from protocol.credit.credit_types import Stake
 
 
-class StdProtocol(AbstractProtocol):
+class StdProtocol(AbstractProtocol, timeline.TimeListener):
 
-    def __init__(self, node):
+    def __init__(self, node: "Node"):
         super().__init__(node)
         self.node_list: list[NodeData] = []
         """List of all nodes known to this node"""
@@ -51,10 +61,6 @@ class StdProtocol(AbstractProtocol):
             lambda event: self.on_event_added(event)
         )
 
-    @staticmethod
-    def weight() -> float:
-        return 1.0
-
     @property
     def node_data(self):
         return NodeData(self.address, self.public_key)
@@ -69,6 +75,9 @@ class StdProtocol(AbstractProtocol):
 
     def sign[T: Hashable](self, message: T) -> Signed[T]:
         return self.sf.sign(message)
+
+    def in_verification_network(self):
+        return self.stake is not None
 
     def verification_node_data(self) -> VerificationNodeData:
         if self.stake is None:
@@ -98,12 +107,58 @@ class StdProtocol(AbstractProtocol):
                     event.timestamp + TIME_TO_CONSISTENCY, schedule_stake_release
                 )
 
-    async def transfer_credit_to(self, amount: int, payee: NodeData):
-        nc = await net.connect(self.address, payee.address)
-        du = DialogueUtil(nc)
-        await self.dialogues()[DialogueEnum.TRANSFER_CREDIT](du, self, amount, payee)
+    def on_time_change(
+        self, old_time: float, new_time: float
+    ) -> timeline.Iterable[timeline.TimelineEvent]:
+        if not self.in_verification_network():
+            return []
 
-    async def request_missing_events_from(self, node: NodeData):
-        nc = await net.connect(self.address, node.address)
-        du = DialogueUtil(nc)
-        await self.dialogues()[DialogueEnum.TRANSFER_CREDIT](du, self)
+        events = []
+        cur_time = old_time
+        while True:
+            interval = random.expovariate(ENTROPY_RATE)
+            cur_time += interval
+            if cur_time > new_time:
+                break
+            events.append(
+                timeline.TimelineEvent(
+                    cur_time, lambda: self.add_task(add_entropy(self))
+                )
+            )
+        return events
+
+    async def transfer_credit_to(self, amount: int, payee: NodeData):
+        await self.run_dialogue(
+            payee.address, DialogueEnum.TRANSFER_CREDIT, amount, payee
+        )
+
+    async def request_missing_events_from(
+        self, node: NodeData, from_checksum: Optional[str] = None
+    ):
+        await self.run_dialogue(
+            node.address, DialogueEnum.REQUEST_MISSING_EVENTS, from_checksum
+        )
+
+    async def join_verification_net(self):
+        return await join_verification_net(self)
+
+    async def leave_verification_net(self):
+        return await leave_verification_net(self)
+
+    async def pause_verification_net(self):
+        return await pause_verification(self)
+
+    async def resume_verification_net(self):
+        return await resume_verification(self)
+
+    def stat_balance(self) -> str:
+        return str(self.wallet.balance)
+
+    def stat_public_key(self) -> str:
+        return self.public_key
+
+    def stat_total_credit(self) -> str:
+        return str(self.wallet.total_credit())
+
+    def stat_verifier(self) -> str:
+        return "[x]" if self.in_verification_network() else "[ ]"

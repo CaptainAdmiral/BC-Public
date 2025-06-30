@@ -4,9 +4,10 @@ import logging
 import uuid
 from typing import cast
 
+import timeline
 from async_manager import wait_all_tasks
-from network_emulator.node import Node, ProtocolSelectionBehaviour
-from protocol import protocol_factory
+from network_emulator import network, out_of_network
+from network_emulator.node import Node
 from protocol.credit.credit_types import ContractType, Stake
 from protocol.dialogue.dialogue_registry import validate_symetric_dialogues
 from protocol.protocols.std_protocol.std_protocol import StdProtocol
@@ -19,8 +20,15 @@ from protocol.verification_net.vnt_types import (
     VNTEventPacket,
 )
 from run import run
-from settings import TIME_SCALE, TIME_TO_CONSISTENCY, TIMESTAMP_LENIENCY, TRANSACTION_WITNESSES, UPDATE_RATE, set_verbose
-import timeline
+from settings import (
+    TIME_SCALE,
+    TIME_TO_CONSISTENCY,
+    TIMESTAMP_LENIENCY,
+    TRANSACTION_WITNESSES,
+    UPDATE_RATE,
+    set_verbose,
+)
+from util import network_stats as net_stats
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -42,13 +50,15 @@ console_handler.setLevel(logging.INFO)
 file_handler = logging.FileHandler("logs.log", mode="w")
 file_handler.setLevel(logging.DEBUG)
 
+
 class Formatter(logging.Formatter):
     def format(self, record):
-        record.timestamp = f"[{timeline.cur_time():.2f}]"
+        record.timestamp = f"{timeline.cur_time():.2f}"
         return super().format(record)
 
-console_formatter = Formatter("%(timestamp)s : %(levelname)s : %(message)s")
-file_formatter = Formatter("%(asctime)s : %(timestamp)s : %(levelname)s : %(message)s")
+
+console_formatter = Formatter("%(timestamp)s::%(levelname)s: %(message)s")
+file_formatter = Formatter("%(asctime)s::%(timestamp)s::%(levelname)s: %(message)s")
 console_handler.setFormatter(console_formatter)
 file_handler.setFormatter(file_formatter)
 root_logger = logging.getLogger()
@@ -57,23 +67,24 @@ root_logger.addHandler(console_handler)
 root_logger.addHandler(file_handler)
 
 
-def register_protocols():
-    protocol_factory.register_protocol(StdProtocol)
-
-
 async def initialize_network():
     """The initial network setup. The standard protocol should ship with these events baked in for security,
     but to keep the network initialization flexible this is not the case here."""
 
-    node_0_node = Node(protocol_selection=ProtocolSelectionBehaviour.USE_ZERO)
-    node_0: ZeroProtocol = cast(ZeroProtocol, node_0_node.protocol)
-    verification_net: list[Node] = [
-        Node(protocol_selection=ProtocolSelectionBehaviour.USE_STD)
-        for i in range(TRANSACTION_WITNESSES)
-    ]
+    node_0_node = Node[ZeroProtocol]()
+    node_0 = ZeroProtocol(node_0_node)
+    node_0_node.set_protocol(node_0)
+    network.set_node_0(node_0_node)
+    out_of_network.advertise(out_of_network.NODE_0_KEY, node_0.node_data)
+    verification_net: list[Node[StdProtocol]] = []
+    for _ in range(TRANSACTION_WITNESSES):
+        node = Node[StdProtocol]()
+        protocol = StdProtocol(node)
+        node.set_protocol(protocol)
+        verification_net.append(node)
 
     for node in verification_net:
-        protocol: StdProtocol = cast(StdProtocol, node.protocol)
+        protocol = node.protocol
 
         stake = Stake(
             uuid=uuid.uuid4(),
@@ -102,11 +113,16 @@ async def initialize_network():
             p.verification_net_timeline.add(je)
             p.stake = je.data.signed_stake.message
 
-    credit_origin_node = Node(protocol_selection=ProtocolSelectionBehaviour.USE_STD)
-    credit_origin = cast(StdProtocol, credit_origin_node.protocol)
+    credit_origin_node = Node[StdProtocol]()
+    credit_origin = StdProtocol(credit_origin_node)
+    credit_origin_node.set_protocol(credit_origin)
+
+    network.set_credit_origin(credit_origin_node)
+    out_of_network.advertise(out_of_network.CREDIT_ORIGIN_KEY, credit_origin.node_data)
 
     await timeline.set_time(TIME_TO_CONSISTENCY + TIMESTAMP_LENIENCY)
     await node_0.transfer_credit_to(10**20, credit_origin.node_data)
+
 
 async def progress_time():
     try:
@@ -116,12 +132,24 @@ async def progress_time():
     except asyncio.CancelledError:
         return
 
+
 async def async_main():
     time_manager = asyncio.create_task(progress_time())
+    logging.info("Initializing network")
     await initialize_network()
     await wait_all_tasks()
+
+    logging.info("\n" + net_stats.node_table().get_string())
+    logging.info(f"Network Total: {net_stats.network_total()}")
+    logging.info("Network Initialized")
+
+    logging.info("Running network simulation")
     await run()
+    logging.info("\n" + net_stats.node_table().get_string())
+    logging.info(f"Network Total: {net_stats.network_total()}")
     await wait_all_tasks()
+    logging.info("Network simulation finished")
+
     time_manager.cancel()
 
 
@@ -133,7 +161,6 @@ async def soft_exit_async_main():
 
 
 def main():
-    register_protocols()
     validate_symetric_dialogues(StdProtocol)
 
 

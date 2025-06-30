@@ -36,7 +36,7 @@ class Signature:
 class Signed[T]:
 
     message: T
-    signatures: frozenset[Signature]
+    signatures: tuple[Signature, ...]
 
     @property
     @cache
@@ -50,7 +50,7 @@ class Signed[T]:
     def with_signatures(self, *signatures: Signature):
         sigs = list(self.signatures)
         sigs.extend(signatures)
-        new_sigs = frozenset(sigs)
+        new_sigs = tuple(sigs)
         return Signed(message=self.message, signatures=new_sigs)
 
     def signed_by(self, public_key: str) -> bool:
@@ -103,7 +103,7 @@ class SignatureFactory:
             signatures = set()
             signatures.add(self.get_signature(message))
 
-        return Signed(message=message, signatures=frozenset(signatures))
+        return Signed(message=message, signatures=tuple(signatures))
 
 
 def sign[T: Hashable](
@@ -114,5 +114,12 @@ def sign[T: Hashable](
     )
     return sf.sign(message)
 
+
 def with_signatures(message: Any, signatures: Iterable[Signature]):
-    return Signed(message=message, signatures=frozenset(signatures))
+    return Signed(message=message, signatures=tuple(signatures))
+
+
+@dataclass(frozen=True)
+class TimestampedSignature:
+    signature: Signature
+    timestamp: float

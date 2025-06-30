@@ -15,19 +15,11 @@ if TYPE_CHECKING:
 class AbstractProtocol(ABC):
 
     def __init__(self, node: "Node"):
-        self._node = node
-        self.address = node.address
+        self._node: "Node" = node
+        self.address: int = node.address
 
     def add_task(self, coro: Coroutine):
         async_manager.add_async_task(coro)
-
-    @staticmethod
-    @abstractmethod
-    def weight() -> float:
-        """The weight with which this protocol will be chosen to populate the network.
-
-        The standard protocol has a weight of 1.0"""
-        pass
 
     @classmethod
     @abstractmethod
@@ -62,7 +54,6 @@ class AbstractProtocol(ABC):
         return responses[dialogue_key]
 
     async def _monitor_net_connection(self, net_con: "NetConnection"):
-        # TODO log these tasks for debugging hanging net connections and dialogues later
         with net_con:
             while net_con.is_open:
                 du = DialogueUtil(net_con)
@@ -71,14 +62,14 @@ class AbstractProtocol(ABC):
                     if dialogue_key_str == ControlPacket.CLOSE:
                         continue
                     assert dialogue_key_str is not None
-                    dialogue_key_str = dialogue_key_str[1:-1] # Strip quotes
+                    dialogue_key_str = dialogue_key_str[1:-1]  # Strip quotes
                     dialogue_key = cast(DialogueEnum, dialogue_key_str)
                     dialogue = self.get_response(dialogue_key)
                     await dialogue(du, self)
                 except DialogueException as e:
                     du.error()
-                    raise(e)
-                    
+                    raise (e)
+
     def accept_net_connection(self, net_con: "NetConnection"):
         """Accepts an incoming net connection"""
         self.add_task(self._monitor_net_connection(net_con))
@@ -88,3 +79,19 @@ class AbstractProtocol(ABC):
         with nc:
             du = DialogueUtil(nc)
             await self.get_dialogue(dialogue)(du, self, *args, **kwargs)
+
+    def stat_address(self) -> str:
+        return str(self.address)
+
+    def stat_balance(self) -> str:
+        return "n/a"
+
+    def stat_total_credit(self) -> str:
+        return "n/a"
+
+    def stat_public_key(self) -> str:
+        return "n/a"
+
+    def stat_verifier(self) -> str:
+        return "[ ]"
+

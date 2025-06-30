@@ -3,8 +3,8 @@ from protocol.credit.credit_types import (
     FundTypeEnum,
     FundTypes,
     FundWithdrawal,
-    Receipt,
     GasFund,
+    Receipt,
 )
 from protocol.credit.tracked_fund import TrackedFund
 from protocol.credit.wallet import Wallet
@@ -15,10 +15,14 @@ class ReceiptBook:
     def __init__(self, owner_pk: str) -> None:
         self.owner_pk = owner_pk
         self._tracked_funds: dict[str, TrackedFund] = {}
-    
+
     def _add_gas(self, fund: TrackedFund, wallet: Wallet):
         for witness in fund.details.witnesses:
-            withdrawals = tuple(receipt for receipt in fund.withdrawals if receipt.signed_by(witness.public_key))
+            withdrawals = tuple(
+                receipt
+                for receipt in fund.withdrawals
+                if receipt.signed_by(witness.public_key)
+            )
             if withdrawals:
                 gas_fund = GasFund(
                     FundTypeEnum.GAS,
@@ -30,7 +34,7 @@ class ReceiptBook:
                     self.owner_pk,
                 )
                 self.add(gas_fund)
-                        
+
         gas_fund = GasFund(
             FundTypeEnum.GAS,
             fund.details.rng_seed,
@@ -65,7 +69,14 @@ class ReceiptBook:
     def add(self, fund_details: FundTypes):
         """Adds a new tracked fund to the receipt book"""
 
-        assert fund_details not in self._tracked_funds
+        if fund_details in self._tracked_funds:
+            assert fund_details.fund_type == FundTypeEnum.CLAIM_STAKE
+            if (
+                fund_details.timestamp
+                < self._tracked_funds[fund_details.id].details.timestamp
+            ):
+                del self._tracked_funds[fund_details.id]
+
         tracked_fund = TrackedFund(fund_details.id, fund_details)
         if tracked_fund.remaining > 0:
             self._tracked_funds[fund_details.id] = tracked_fund

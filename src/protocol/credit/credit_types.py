@@ -1,21 +1,22 @@
+import random
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from enum import StrEnum, auto
 from functools import cache
-import random
+import statistics
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import Discriminator, Tag
 
-from crypto.signature import ManagedSignable, Signed
+from crypto.signature import ManagedSignable, Signed, TimestampedSignature
 from crypto.util import to_sha256
 from protocol.dialogue.dialogue_types import DialogueException
 from protocol.dialogue.util.rng_seed import (
     RNGSeed,
     RNGSeedTypes,
     get_rng_type,
-    get_transaction_rng,
 )
 from protocol.dialogue.util.witness_selection_util import (
     validate_missing_events,
@@ -30,7 +31,6 @@ from settings import (
     TIME_TO_CONSISTENCY,
 )
 from timeline import cur_time
-from util.timestamped import Timestamped
 
 if TYPE_CHECKING:
     from protocol.protocols.std_protocol.std_protocol import StdProtocol
@@ -53,7 +53,7 @@ class Contract(ManagedSignable):
 @dataclass(frozen=True)
 class FundWithdrawal(ManagedSignable):
     fund_id: str
-    timestamp: float
+    fund_timestamp: float
     rng_seed: Annotated[RNGSeedTypes, Discriminator(get_rng_type)]
     witnesses: tuple[VerificationNodeData, ...]
     missing_event_ids: tuple[str, ...]
@@ -63,7 +63,7 @@ class FundWithdrawal(ManagedSignable):
         return (
             self.fund_id,
             self.amount,
-            self.timestamp,
+            self.fund_timestamp,
             self.rng_seed,
         )
 
@@ -74,23 +74,23 @@ class FundWithdrawal(ManagedSignable):
         return False
 
     def validate_selected_witnesses(self, vnt: "VerificationNetTimeline"):
-        checksum = vnt.get_latest_checksum(self.timestamp - TIME_TO_CONSISTENCY)
+        checksum = vnt.get_latest_checksum(self.fund_timestamp - TIME_TO_CONSISTENCY)
         seed = self.rng_seed
         if checksum != seed.checksum:
             raise DialogueException(
-                f"Invalid RNG seed, checksum {seed.checksum} does not match for timestamp {self.timestamp}"
+                f"Invalid RNG seed, checksum {seed.checksum} does not match for timestamp {self.fund_timestamp}"
             )
         validate_selected_witnesses(
             vnt=vnt,
             selected_nodes=set(self.witnesses),
-            time_of_selection=self.timestamp,
+            time_of_selection=self.fund_timestamp,
             seed=seed,
             missing_event_ids=set(self.missing_event_ids),
         )
 
     def validate_missing_events(self, vnt: "VerificationNetTimeline"):
         events = (vnt.event_from_id(event_id) for event_id in self.missing_event_ids)
-        validate_missing_events(events, self.timestamp)
+        validate_missing_events(events, self.fund_timestamp)
 
 
 @dataclass(frozen=True)
@@ -178,7 +178,7 @@ class Fund(ABC):
 
     def validate_expiry(self):
         if self.is_expired():
-            raise DialogueException(f"Receipt Expired: {self.id}")
+            raise DialogueException(f"Fund Expired: {self.id}")
 
 
 @dataclass(frozen=True)
@@ -216,6 +216,7 @@ class Receipt(ManagedSignable, Fund, Signed[Transaction]):
             seed=self.rng_seed,
         )
 
+
 @dataclass(frozen=True)
 class GasFund(Fund):
     fund_type: Literal[FundTypeEnum.GAS]
@@ -241,7 +242,9 @@ class GasFund(Fund):
 
         total = 0
         for withdrawal in self.withdrawals:
-            signatories = withdrawal.signatories & set(witness.public_key for witness in self.witnesses)
+            signatories = withdrawal.signatories & set(
+                witness.public_key for witness in self.witnesses
+            )
             n_sigs = len(signatories)
             total += GAS_AMOUNT // n_sigs
 
@@ -262,13 +265,100 @@ class GasFund(Fund):
         )
 
 
+@dataclass(frozen=True)
+class ClaimedStake:
+    original_fund: Fund
+    withdrawals: tuple[Receipt, ...]
+    fund_owner_pk: str
+
+    @cache
+    def get_bad_witnesses(self):
+        stake_losers: list[VerificationNodeData] = []
+        original_amount = self.original_fund.amount
+        tracked_withdrawals: defaultdict[str, int] = defaultdict(int)
+        for withdrawal in self.withdrawals:
+            for sig in withdrawal.signatories:
+                tracked_withdrawals[sig] += withdrawal.amount
+
+        for pk, tracked_amount in tracked_withdrawals.items():
+            if tracked_amount > original_amount:
+                bad_witness = next(
+                    witness for withdrawal in self.withdrawals for witness in withdrawal.witnesses if witness.public_key == pk
+                )
+                stake_losers.append(bad_witness)
+        return stake_losers
+
+    @property
+    @cache
+    def amount(self):
+        return len(self.get_bad_witnesses()) * STAKE_AMOUNT
+
+    def validate(self, protocol: "StdProtocol"):
+        if not self.get_bad_witnesses():
+            raise DialogueException("No bad witnesses in stake claim")
+        for receipt in self.withdrawals:
+            receipt.validate_selected_witnesses(protocol)
+            receipt.validate_signatures()
+
+
+@dataclass(frozen=True)
+class TimestampedStakeClaim:
+    stake: ClaimedStake
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class ClaimedStakeFund(Fund):
+    claimed_stake: ClaimedStake
+    timestamped_signatures: tuple[TimestampedSignature, ...]
+    fund_type: Literal[FundTypeEnum.CLAIM_STAKE]
+    rng_seed: Annotated[RNGSeedTypes, Discriminator(get_rng_type)]
+    witnesses: tuple[VerificationNodeData, ...]
+    timestamp: float
+    
+    def __post_init__(self):
+        if self.timestamp is not None:
+            raise ValueError("timestamp is computed automatically, expected timestamp=None")
+
+        timestamp: float = statistics.median(ts.timestamp for ts in self.timestamped_signatures)
+        object.__setattr__(self, 'timestamp', timestamp)
+
+    @property
+    @cache
+    def id(self):
+        return to_sha256((self.fund_type, self.claimed_stake.original_fund.id))
+
+    def __hash__(self):
+        return hash((self.fund_type, self.claimed_stake.original_fund.id))
+
+    @property
+    def amount(self) -> int:
+        return self.claimed_stake.amount
+
+    def validate(self, protocol: "StdProtocol"):
+        self.claimed_stake.validate(protocol)
+        for ts_sig in self.timestamped_signatures:
+            ts_sig.signature.validate(TimestampedStakeClaim(self.claimed_stake, ts_sig.timestamp))
+
+    def validate_selected_witnesses(self, protocol: "StdProtocol"):
+        validate_selected_witnesses(
+            vnt=protocol.verification_net_timeline,
+            selected_nodes=set(self.witnesses),
+            time_of_selection=self.timestamp,
+            seed=self.rng_seed,
+        )
+
 def get_fund_type(v: Any) -> str:
     if isinstance(v, dict):
         return v["fund_type"]
     return getattr(v, "fund_type")
 
 
-FundTypes = (Annotated[Receipt, Tag(FundTypeEnum.RECEIPT)] | Annotated[GasFund, Tag(FundTypeEnum.GAS)])
+FundTypes = (
+    Annotated[Receipt, Tag(FundTypeEnum.RECEIPT)]
+    | Annotated[GasFund, Tag(FundTypeEnum.GAS)]
+    | Annotated[ClaimedStakeFund, Tag(FundTypeEnum.CLAIM_STAKE)]
+)
 
 
 @dataclass(frozen=True)

@@ -44,6 +44,7 @@ class SelectedNode:
 @dataclass
 class SelectedWitnesses:
     witnesses: list[SelectedNode]
+    seed: RNGSeed
 
     def close_all_connections(self):
         for witness in self.witnesses:
@@ -165,7 +166,7 @@ async def select_witnesses(
             nc.close()
         raise e
 
-    return SelectedWitnesses(selected_nodes), skip_list
+    return SelectedWitnesses(selected_nodes, seed), skip_list
 
 
 def validate_signature_count(
