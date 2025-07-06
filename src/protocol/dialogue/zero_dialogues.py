@@ -20,6 +20,7 @@ from protocol.dialogue.util.witness_selection_util import SelectedNode, select_w
 from protocol.protocols.common_types import NodeData
 from protocol.verification_net.vnt_event_factory import VNTEventFactory
 from protocol.verification_net.vnt_types import VNTEventPacket
+from settings import TIME_TO_CONSISTENCY
 from timeline import cur_time
 
 if TYPE_CHECKING:
@@ -305,9 +306,16 @@ async def transfer_credit(
         witness_obj.close_all_connections()
         filtered_results = filter(filter_exceptions, results)
         missing_events = set(event for events in filtered_results for event in events)
+        checksum = protocol.verification_net_timeline.get_latest_checksum(
+            timestamp - TIME_TO_CONSISTENCY
+        )
+        protocol.verification_net_timeline.add_from_packets(missing_events)
+        new_checksum = protocol.verification_net_timeline.get_latest_checksum(
+            timestamp - TIME_TO_CONSISTENCY
+        )
 
         # If no missing events before the cutoff then we have the right witnesses
-        if not missing_events:
+        if checksum == new_checksum:
             # Make sure we're synced up with payee
 
             if await check_same_vnt(du, protocol):

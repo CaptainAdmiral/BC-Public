@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 import secrets
 import uuid
@@ -402,11 +403,6 @@ async def request_hold_receipt_response(du: DialogueUtil, protocol: "StdProtocol
 
     receipt.validate_signatures()
     protocol.receipt_book.add(receipt)
-    protocol.schedule_event(
-        receipt.contract.timestamp + ROLLOVER_PERIOD * 2,
-        lambda: protocol.receipt_book.drop_fund(receipt.id, protocol.wallet),
-    )
-
     du.acknowledge()
 
 
@@ -453,12 +449,15 @@ async def get_up_to_date_witnesses(
             return_exceptions=True,
         )
 
-        witness_obj.close_all_connections()
         filtered_results = filter(filter_exceptions, results)
         missing_events = set(event for events in filtered_results for event in events)
+        protocol.verification_net_timeline.add_from_packets(missing_events)
+        new_checksum = protocol.verification_net_timeline.get_latest_checksum(
+            timestamp - TIME_TO_CONSISTENCY
+        )
 
         # If no missing events before the cutoff then we have the right witnesses
-        if not missing_events:
+        if checksum == new_checksum:
             if synced_du is not None:
                 # Make sure we're synced up with payee
                 if await check_same_vnt(synced_du, protocol):
@@ -469,6 +468,8 @@ async def get_up_to_date_witnesses(
                 await sync_vnt(synced_du, protocol)
             else:
                 break
+
+        witness_obj.close_all_connections()
 
     # Run stat tests on selected witnesses to make sure the selected witnesses are valid
     validate_skips(skipped)
@@ -705,7 +706,11 @@ async def distribute_receipt(
             ),
             return_exceptions=True,
         )
-        protocol.wallet.add_credit(receipt)
+        tracked_fund = protocol.wallet.add_credit(receipt)
+        protocol.schedule_event(
+            signed_receipt.message.timestamp + ROLLOVER_PERIOD,
+            lambda: protocol.add_task(rollover_fund_witnesses(protocol, tracked_fund)),
+        )
 
     finally:
         for connection in witness_connections:
@@ -951,7 +956,7 @@ async def request_rollover_signature_response(
     if fund_details.id not in protocol.receipt_book:
         raise DialogueException("Not a witness for this transaction")
 
-    if fund_details.timestamp + ROLLOVER_PERIOD < cur_time() + TIMESTAMP_LENIENCY:
+    if cur_time() < fund_details.timestamp + ROLLOVER_PERIOD:
         raise DialogueException("Too soon for rollover")
 
     own_tracked_fund = protocol.receipt_book[fund_details.id]
@@ -968,6 +973,7 @@ async def request_rollover_signature_response(
         raise DialogueException("Undeclared reservations on rollover")
 
     du.reply(protocol.sf.get_signature(fund_packet))
+    protocol.receipt_book.drop_fund(fund_details.id, protocol.wallet)
 
 
 @register_init(DialogueEnum.SEND_ROLLOVER_FUND)
@@ -1005,11 +1011,6 @@ async def send_rollover_fund_response(du: DialogueUtil, protocol: "StdProtocol")
     new_fund.validate_selected_witnesses(protocol)
 
     protocol.receipt_book.add(new_fund)
-    protocol.schedule_event(
-        new_fund.timestamp + ROLLOVER_PERIOD * 2,
-        lambda: protocol.receipt_book.drop_fund(new_fund.id, protocol.wallet),
-    )
-
     du.acknowledge()
 
 
@@ -1021,14 +1022,16 @@ async def rollover_fund_witnesses(protocol: "StdProtocol", fund: "TrackedFund"):
 
     async def get_old_signature(witness: VerificationNodeData) -> Signature:
         wnc = await network.connect(protocol.address, witness.address)
-        wdu = DialogueUtil(wnc)
-        sig = await request_rollover_signature(wdu, protocol, fund_packet)
+        with wnc:
+            wdu = DialogueUtil(wnc)
+            sig = await request_rollover_signature(wdu, protocol, fund_packet)
         return sig
 
     signatures = await asyncio.gather(
         *(get_old_signature(witness) for witness in old_fund_details.witnesses)
     )
-    signatures = filter(filter_exceptions, signatures)
+    
+    signatures = set(filter(filter_exceptions, signatures))
     validate_signature_count(old_fund_details.witnesses, signatures)
     signed_fund_packet = with_signatures(fund_packet, signatures)
 
@@ -1047,8 +1050,14 @@ async def rollover_fund_witnesses(protocol: "StdProtocol", fund: "TrackedFund"):
             )
         )
 
+    await asyncio.wait(send_to_new_witnesses_tasks)
     witness_obj.close_all_connections()
-    protocol.wallet[old_fund_details.id].update_after_rollover(witness_nodes, timestamp)
+    tracked_fund = protocol.wallet[old_fund_details.id]
+    tracked_fund.update_after_rollover(witness_nodes, timestamp)
+    protocol.schedule_event(
+        timestamp + ROLLOVER_PERIOD + TIMESTAMP_LENIENCY,
+        lambda: protocol.add_task(rollover_fund_witnesses(protocol, tracked_fund)),
+    )
 
 
 @register_init(DialogueEnum.TIMESTAMP_STAKE_CLAIMED)
@@ -1105,11 +1114,6 @@ async def request_hold_stake_claim_response(du: DialogueUtil, protocol: "StdProt
     stake_claim.validate(protocol)
 
     protocol.receipt_book.add(stake_claim)
-    protocol.schedule_event(
-        stake_claim.timestamp + ROLLOVER_PERIOD * 2,
-        lambda: protocol.receipt_book.drop_fund(stake_claim.id, protocol.wallet),
-    )
-
     du.acknowledge()
 
 
@@ -1155,7 +1159,11 @@ async def distribute_fund_claim(protocol: "StdProtocol", claimed_stake: "Claimed
             ),
             return_exceptions=True,
         )
-        protocol.wallet.add_credit(fund)
+        tracked_fund = protocol.wallet.add_credit(fund)
+        protocol.schedule_event(
+            timestamp + ROLLOVER_PERIOD + TIMESTAMP_LENIENCY,
+            lambda: protocol.add_task(rollover_fund_witnesses(protocol, tracked_fund)),
+        )
 
     finally:
         witnesses_obj.close_all_connections()

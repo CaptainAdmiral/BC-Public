@@ -3,12 +3,10 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Discriminator
 
-from crypto.signature import Signature, Signed
-from protocol.credit.credit_types import ClaimedStake, FundTypes, get_fund_type
-
-if TYPE_CHECKING:
-    from protocol.credit.credit_types import Receipt, Stake
-    from protocol.protocols.common_types import VerificationNodeData
+from crypto.signature import Signed
+from protocol.credit.credit_types import FundTypes, get_fund_type
+from protocol.credit.credit_types import Receipt, Stake
+from protocol.protocols.common_types import VerificationNodeData
 
 
 @dataclass(frozen=True)
@@ -24,14 +22,17 @@ class Nullable[T]:
 
 @dataclass(frozen=True)
 class TrackedFundPacket:
-    id: str
     details: Annotated[FundTypes, Discriminator(get_fund_type)]
-    withdrawals: tuple["Receipt", ...]
-    reservations: tuple["Stake", ...]
+    withdrawals: tuple[Receipt, ...]
+    reservations: tuple[Stake, ...]
+
+    @property
+    def id(self):
+        return self.details.id
 
 
 @dataclass(frozen=True)
 class RolloverPacket:
     signed_fund: Signed[TrackedFundPacket]
-    new_witnesses: tuple["VerificationNodeData", ...]
+    new_witnesses: tuple[VerificationNodeData, ...]
     witness_selection_time: float

@@ -24,12 +24,21 @@ def add_async_task(coro: Coroutine):
     tasks.add(task)
     task.add_done_callback(tasks.discard)
 
+
 async def wait_all_tasks():
     if not tasks:
         return
     await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
 
+
+async def flush_event_loop():
+    async_depth = 10
+    for _ in range(async_depth):
+        await asyncio.sleep(0)
+
+
 def as_async[**P](f: Callable[P, Any]):
     async def wrapper(*args: P.args, **kwargs: P.kwargs):
         return f(*args, **kwargs)
+
     return wrapper

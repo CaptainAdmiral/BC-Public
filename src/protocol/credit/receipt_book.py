@@ -44,7 +44,9 @@ class ReceiptBook:
             tuple(fund.withdrawals),
             self.owner_pk,
         )
-        wallet.add_credit(gas_fund)
+
+        if gas_fund.amount != 0:
+            wallet.add_credit(gas_fund)
 
     def drop_fund(self, fund_id: str, wallet: Wallet):
         fund = self._tracked_funds[fund_id]
@@ -77,7 +79,7 @@ class ReceiptBook:
             ):
                 del self._tracked_funds[fund_details.id]
 
-        tracked_fund = TrackedFund(fund_details.id, fund_details)
+        tracked_fund = TrackedFund(fund_details)
         if tracked_fund.remaining > 0:
             self._tracked_funds[fund_details.id] = tracked_fund
 

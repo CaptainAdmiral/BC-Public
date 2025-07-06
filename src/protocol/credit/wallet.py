@@ -36,6 +36,9 @@ class Wallet:
         total = 0
         funds: list[FundWithdrawal] = []
         for fund in self:
+            if fund.is_expired():
+                continue
+
             withdrawal_amount = min(fund.available, amount - total)
             timestamp = fund.details.timestamp
             missing_events = event_timeline.events_by_time_added(
@@ -61,9 +64,10 @@ class Wallet:
     def add_credit(self, fund: FundTypes):
         """Updates the internally tracked credit based on the fund"""
 
-        tracked_fund = TrackedFund(id=fund.id, details=fund)
+        tracked_fund = TrackedFund(details=fund)
         bisect.insort_right(self._funds, tracked_fund, key=lambda tf: tf.remaining)
         self._fund_dict[tracked_fund.id] = tracked_fund
+        return tracked_fund
 
     def deduct_credit(self, receipt: Receipt):
         """Deducts the receipt from the internally tracked credit"""

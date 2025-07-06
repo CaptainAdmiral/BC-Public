@@ -28,7 +28,7 @@ SIG_PADDING = padding.PSS(
 )
 
 # Network
-TIME_SCALE = 1
+TIME_SCALE = 8
 """How many simulated seconds pass for every real world second"""
 
 UPDATE_RATE = 0.1

@@ -12,21 +12,21 @@ if TYPE_CHECKING:
 
 class TrackedFund:
 
-    def __init__(self, id: str, details: FundTypes):
-        self.id = id
+    def __init__(self, details: FundTypes):
+        self.id = details.id
         self.details = details
         self.withdrawals: list["Receipt"] = []
         self.reservations: list["Stake"] = []
 
     @classmethod
     def from_packet(cls, packet: TrackedFundPacket):
-        tracked_fund = TrackedFund(packet.id, packet.details)
+        tracked_fund = TrackedFund(packet.details)
         tracked_fund.withdrawals.extend(packet.withdrawals)
         tracked_fund.reservations.extend(packet.reservations)
 
     def to_packet(self):
         return TrackedFundPacket(
-            self.id, self.details, tuple(self.withdrawals), tuple(self.reservations)
+            self.details, tuple(self.withdrawals), tuple(self.reservations)
         )
 
     @property

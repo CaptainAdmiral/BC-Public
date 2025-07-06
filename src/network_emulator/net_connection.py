@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -7,7 +8,7 @@ from async_manager import add_async_task
 from network_emulator import network
 from network_emulator.network_exceptions import NetworkException
 from protocol.dialogue.const import ControlPacket
-from settings import get_verbose
+from settings import NETWORK_DELAY, get_verbose
 import timeline
 
 if TYPE_CHECKING:
@@ -41,6 +42,12 @@ class NetConnection:
                 + "\n"
                 + message
             )
+
+    @dataclass
+    class _PacketMetadata:
+        "metadata about the packet for use in debugging"
+        sent_timestamp: float
+
 
     def __init__(self, node: "Node", other_node: "Node", *, inverse=None):
         self.is_open = False
@@ -184,14 +191,19 @@ class NetConnection:
         self._write_to(self.get_inverse(), out)
 
     def _write_to(self, net_connection: "NetConnection", out: str):
-        timeline.schedule_event(timeline.cur_time() + network.get_delay(), lambda: net_connection.receive_packet(str(out)))
+        timestamp = timeline.cur_time()
+        metadata = NetConnection._PacketMetadata(sent_timestamp=timestamp)
+        timeline.schedule_event(timeline.cur_time() + network.get_delay(), lambda: net_connection.receive_packet(str(out), metadata))
 
-    def receive_packet(self, pkt: str):
+    def receive_packet(self, pkt: str, metadata: _PacketMetadata):
         if get_verbose():
             logging.info(f"[{self._other_node.address} -> {self._node.address}] {pkt}")
 
         if pkt == "close":
             self._handle_close()
+        
+        if timeline.cur_time() > metadata.sent_timestamp + NETWORK_DELAY * 10:
+            raise Exception("Packet took an usually long time to arrive (might be a problem with flushing the event loop in the timeline)")
         
         self.in_waiting = True
         self._read_buffer.append(str(pkt))
