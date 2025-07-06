@@ -24,7 +24,7 @@ async def run():
 
     nodes: list[Node[StdProtocol]] = []
 
-    for _ in range(10):
+    for _ in range(5):
         node = Node()
         protocol = StdProtocol(node)
         node.set_protocol(protocol)

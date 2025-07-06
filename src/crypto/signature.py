@@ -8,7 +8,7 @@ from cryptography.exceptions import InvalidSignature
 
 from crypto.util import PrivateKey, PublicKey, to_bytes
 from protocol.dialogue.dialogue_types import DialogueException
-from settings import NODE_0_PUBLIC_KEY
+from settings import NODE_0_PUBLIC_KEY, VALIDATE_SIGNATURES
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,9 @@ class Signature:
     signature: str
 
     def validate(self, message: Any):
+        if not VALIDATE_SIGNATURES:
+            return
+
         if isinstance(message, ManagedSignable):
             message = message.signature_content()
 
@@ -44,6 +47,7 @@ class Signed[T]:
         return set(sig.public_key for sig in self.signatures)
 
     def validate_signatures(self):
+        assert len(self.signatures) < 120
         for sig in self.signatures:
             sig.validate(self.message)
 

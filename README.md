@@ -36,8 +36,6 @@ Simulating a proof of stake blockchain such as Etherium would require roughly th
 
 # How?
 
-The results described here are achieved by eliminating the need for consensus on a distributed ledger across the network. Rather than a consensus on every transaction the network reaches a lazy consensus on its members and validates transactions using statistical analysis. For a detailed look at how it works please see src/protocol/dialogue/dialogues.py for an outline of the protocol. An attempt was made to make it readable to non programmers, but I failed.
-
-
+The results described here are achieved by eliminating the need for consensus on a distributed ledger across the network. Rather than a consensus on every transaction the network reaches a lazy consensus on its members and validates transactions using statistical analysis. For a detailed look at how it works please see src/protocol/dialogue/dialogues.py for an outline of the protocol.
 
 For business or academic enquiries (I encourage you to reach out if you have any questions) please contact mattb1197@live.co.uk

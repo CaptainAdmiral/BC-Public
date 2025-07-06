@@ -26,9 +26,11 @@ SIG_PUBLIC_EXPONENT = 65537
 SIG_PADDING = padding.PSS(
     mgf=padding.MGF1(SIG_HASH), salt_length=padding.PSS.MAX_LENGTH
 )
+VALIDATE_SIGNATURES = True
+"""If disabled signatures won't be checked and all signature validation will automatically pass"""
 
 # Network
-TIME_SCALE = 8
+TIME_SCALE = 1
 """How many simulated seconds pass for every real world second"""
 
 UPDATE_RATE = 0.1
